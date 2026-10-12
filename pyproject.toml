@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=42"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "study-tracker"
+version = "0.1.0"
+description = "A personal study session tracker"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.7,<7",
+    "matplotlib>=3.8,<4",
+]
+
+[project.scripts]
+study-tracker = "study_tracker.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

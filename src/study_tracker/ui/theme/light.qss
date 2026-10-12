@@ -1,0 +1,214 @@
+/* Study Tracker – Light Theme
+   ============================================================
+   Colours
+   --------
+   Background:   #F5F5F5
+   Surface:      #FFFFFF
+   Primary:      #1976D2   (blue)
+   Primary dark: #1565C0
+   Accent:       #26A69A   (teal)
+   Text main:    #212121
+   Text muted:   #757575
+   Border:       #E0E0E0
+   Error:        #D32F2F
+   ============================================================ */
+
+/* ── Global ──────────────────────────────────────────────── */
+QWidget {
+    background-color: #F5F5F5;
+    color: #212121;
+    font-family: "Segoe UI", "Inter", "Arial", sans-serif;
+    font-size: 10pt;
+}
+
+QMainWindow {
+    background-color: #F5F5F5;
+}
+
+/* ── Sidebar ─────────────────────────────────────────────── */
+QListWidget#Sidebar {
+    background-color: #1976D2;
+    color: #FFFFFF;
+    border: none;
+    font-size: 10pt;
+    padding-top: 8px;
+}
+
+QListWidget#Sidebar::item {
+    padding: 10px 8px;
+    border-radius: 6px;
+    margin: 2px 6px;
+}
+
+QListWidget#Sidebar::item:hover {
+    background-color: #1565C0;
+}
+
+QListWidget#Sidebar::item:selected {
+    background-color: #0D47A1;
+    color: #FFFFFF;
+}
+
+/* ── Timer Bar ───────────────────────────────────────────── */
+QWidget#TimerBar {
+    background-color: #E3F2FD;
+    border-bottom: 1px solid #BBDEFB;
+    padding: 6px 12px;
+}
+
+QLabel#TimerElapsed {
+    font-size: 14pt;
+    font-weight: bold;
+    color: #1565C0;
+}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+QPushButton {
+    background-color: #1976D2;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    font-weight: 500;
+    min-width: 64px;
+}
+
+QPushButton:hover {
+    background-color: #1565C0;
+}
+
+QPushButton:pressed {
+    background-color: #0D47A1;
+}
+
+QPushButton:disabled {
+    background-color: #BDBDBD;
+    color: #757575;
+}
+
+QPushButton[flat="true"] {
+    background-color: transparent;
+    color: #1976D2;
+    border: 1px solid #1976D2;
+}
+
+QPushButton[flat="true"]:hover {
+    background-color: #E3F2FD;
+}
+
+/* ── Input fields ────────────────────────────────────────── */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox,
+QDateEdit, QTimeEdit, QDateTimeEdit, QComboBox {
+    background-color: #FFFFFF;
+    border: 1px solid #BDBDBD;
+    border-radius: 4px;
+    padding: 4px 8px;
+    selection-background-color: #BBDEFB;
+}
+
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus,
+QDateEdit:focus, QTimeEdit:focus, QComboBox:focus {
+    border-color: #1976D2;
+    outline: none;
+}
+
+QComboBox::drop-down {
+    border: none;
+    padding-right: 8px;
+}
+
+/* ── Table ───────────────────────────────────────────────── */
+QTableWidget, QTableView {
+    background-color: #FFFFFF;
+    border: 1px solid #E0E0E0;
+    gridline-color: #F5F5F5;
+    selection-background-color: #E3F2FD;
+    selection-color: #212121;
+}
+
+QHeaderView::section {
+    background-color: #FAFAFA;
+    border: none;
+    border-bottom: 2px solid #E0E0E0;
+    border-right: 1px solid #E0E0E0;
+    padding: 6px 8px;
+    font-weight: 600;
+}
+
+/* ── Status bar ──────────────────────────────────────────── */
+QStatusBar {
+    background-color: #EEEEEE;
+    color: #757575;
+    border-top: 1px solid #E0E0E0;
+    font-size: 9pt;
+}
+
+/* ── Scroll bars ─────────────────────────────────────────── */
+QScrollBar:vertical {
+    width: 8px;
+    background: transparent;
+}
+
+QScrollBar::handle:vertical {
+    background: #BDBDBD;
+    border-radius: 4px;
+    min-height: 30px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #9E9E9E;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    height: 8px;
+    background: transparent;
+}
+
+QScrollBar::handle:horizontal {
+    background: #BDBDBD;
+    border-radius: 4px;
+    min-width: 30px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #9E9E9E;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* ── Group boxes ─────────────────────────────────────────── */
+QGroupBox {
+    border: 1px solid #E0E0E0;
+    border-radius: 6px;
+    margin-top: 12px;
+    padding-top: 8px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 10px;
+    padding: 0 4px;
+    color: #1976D2;
+}
+
+/* ── Dialogs ─────────────────────────────────────────────── */
+QDialog {
+    background-color: #FFFFFF;
+}
+
+/* ── Tool tips ───────────────────────────────────────────── */
+QToolTip {
+    background-color: #424242;
+    color: #FFFFFF;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
