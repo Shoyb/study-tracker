@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 
 from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from study_tracker.core.clock import Clock
+from study_tracker.ui.pages.subjects_page import SubjectsPage
 from study_tracker.ui.sidebar import Sidebar
 from study_tracker.ui.signals import AppSignals
 
@@ -87,9 +90,17 @@ class MainWindow(QMainWindow):
         "Settings",
     ]
 
-    def __init__(self, signals: AppSignals, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        signals: AppSignals,
+        conn: sqlite3.Connection | None = None,
+        clock: Clock | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._signals = signals
+        self._conn = conn
+        self._clock = clock or Clock()
 
         self.setWindowTitle("Study Tracker")
         self.setMinimumSize(QSize(900, 600))
@@ -126,7 +137,11 @@ class MainWindow(QMainWindow):
 
         self._stack = QStackedWidget(right_col)
         for name in self._PAGE_NAMES:
-            self._stack.addWidget(PlaceholderPage(name))
+            if name == "Subjects" and self._conn is not None:
+                self._subjects_page = SubjectsPage(self._conn, self._signals, self._clock)
+                self._stack.addWidget(self._subjects_page)
+            else:
+                self._stack.addWidget(PlaceholderPage(name))
         right_layout.addWidget(self._stack)
 
         root_layout.addWidget(right_col)

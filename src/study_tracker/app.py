@@ -18,6 +18,7 @@ import sys
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from study_tracker.core import paths
+from study_tracker.core.clock import Clock
 from study_tracker.core.errors import DatabaseError
 from study_tracker.core.logging_setup import configure_logging
 from study_tracker.db.connection import get_connection, quick_check
@@ -177,11 +178,12 @@ class Application(QApplication):
             )
             sys.exit(1)
 
-        # 5. Signals hub.
+        # 5. Signals hub and clock.
         self._signals = AppSignals(self)
+        self._clock = Clock()
 
         # 6. Main window.
-        self._window = MainWindow(self._signals)
+        self._window = MainWindow(self._signals, conn=self._conn, clock=self._clock)
         self._window.show()
 
         log.info("Startup complete.")
