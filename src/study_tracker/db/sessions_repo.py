@@ -105,6 +105,31 @@ def get_timed_for_date(conn: sqlite3.Connection, local_date: str) -> list[Sessio
     return [_row_to_session(r) for r in rows]
 
 
+def find_overlapping(
+    conn: sqlite3.Connection,
+    *,
+    start_utc: str,
+    end_utc: str,
+    exclude_id: int | None = None,
+) -> list[Session]:
+    """Find any sessions with exact times that overlap the given interval [start_utc, end_utc).
+
+    Intervals touching at an exact boundary are not considered overlapping.
+    """
+    sql = """
+        SELECT * FROM sessions
+        WHERE start_utc IS NOT NULL
+          AND start_utc < ?
+          AND end_utc > ?
+    """
+    params: list = [end_utc, start_utc]
+    if exclude_id is not None:
+        sql += " AND id != ?"
+        params.append(exclude_id)
+    sql += " ORDER BY start_utc"
+    return [_row_to_session(r) for r in conn.execute(sql, params).fetchall()]
+
+
 def insert(
     conn: sqlite3.Connection,
     *,

@@ -177,3 +177,68 @@ class MainWindow(QMainWindow):
     def show_status(self, message: str, timeout_ms: int = 4000) -> None:
         """Display a short message in the status bar."""
         self._status_bar.showMessage(message, timeout_ms)
+
+    def add_manual_session(
+        self,
+        subject_id: int | None = None,
+        task_id: int | None = None,
+    ) -> None:
+        """Open SessionDialog and save manual study session."""
+        if self._conn is None:
+            return
+
+        from datetime import datetime
+        from study_tracker.core.errors import AppError
+        from study_tracker.core.formatting import format_duration
+        from study_tracker.db import subjects_repo
+        from study_tracker.services import session_service
+        from study_tracker.ui.dialogs.session_dialog import SessionDialog
+        from study_tracker.ui.widgets.confirm import warn
+
+        offset = datetime.now().astimezone().utcoffset()
+        offset_mins = int(offset.total_seconds() // 60) if offset else 0
+
+        dlg = SessionDialog(
+            self._conn,
+            self._clock,
+            self,
+            default_subject_id=subject_id,
+            default_task_id=task_id,
+        )
+        if dlg.exec() != SessionDialog.DialogCode.Accepted:
+            return
+
+        try:
+            now_utc = self._clock.now_utc()
+            if dlg.is_timed:
+                st_utc, et_utc = dlg.get_timestamps_utc(offset_mins)
+                sess = session_service.add_manual_timed(
+                    self._conn,
+                    subject_id=dlg.subject_id,
+                    task_id=dlg.task_id,
+                    start_utc=st_utc,
+                    end_utc=et_utc,
+                    duration_secs=dlg.duration_secs,
+                    notes=dlg.notes,
+                    utc_offset_mins=offset_mins,
+                    created_at=now_utc,
+                )
+            else:
+                sess = session_service.add_manual_duration(
+                    self._conn,
+                    subject_id=dlg.subject_id,
+                    task_id=dlg.task_id,
+                    local_date=dlg.local_date,
+                    duration_secs=dlg.duration_secs,
+                    notes=dlg.notes,
+                    utc_offset_mins=offset_mins,
+                    created_at=now_utc,
+                )
+
+            subj = subjects_repo.get_by_id(self._conn, dlg.subject_id)
+            subj_name = subj.name if subj else ""
+            self.show_status(f"Session saved: {format_duration(sess.duration_secs)}, {subj_name}")
+            self._signals.sessions_changed.emit()
+            self._signals.tasks_changed.emit()
+        except AppError as exc:
+            warn(self, "Cannot save session", str(exc))

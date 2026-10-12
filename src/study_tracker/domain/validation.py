@@ -76,13 +76,27 @@ def validate_task_priority(priority: str) -> str:
 
 # ── Session rules ─────────────────────────────────────────────────────────────
 
-VALID_SESSION_TYPES = ("timer", "manual_timed", "manual_duration")
+VALID_SESSION_TYPES = ("timer", "manual_timed", "manual_duration", "device")
+MAX_SESSION_SECS = 86400  # 24 hours
 
 
 def validate_duration_secs(secs: int) -> int:
     if secs <= 0:
         raise ValidationError("Session duration must be greater than zero.")
+    if secs > MAX_SESSION_SECS:
+        raise ValidationError("Session duration cannot exceed 24 hours (86,400 seconds).")
     return secs
+
+
+def validate_session_times(
+    start_utc: str,
+    end_utc: str,
+    now_utc: str | None = None,
+) -> None:
+    if end_utc <= start_utc:
+        raise ValidationError("Session end time must be after start time.")
+    if now_utc and start_utc > now_utc:
+        raise ValidationError("Session start time cannot be in the future.")
 
 
 def validate_session_type(session_type: str) -> str:
