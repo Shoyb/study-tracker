@@ -33,3 +33,22 @@ def test_main_window_navigates_to_subjects(qtbot, db_conn):
     window._navigate(6)
     assert window._stack.currentIndex() == 6
     assert hasattr(window, "_subjects_page")
+
+
+def test_main_window_navigates_to_tasks(qtbot, db_conn):
+    clock = FakeClock()
+    signals = AppSignals()
+    window = MainWindow(signals, conn=db_conn, clock=clock)
+    qtbot.addWidget(window)
+    window.show()
+
+    # Navigate to tasks page (index 2)
+    window._navigate(2)
+    assert window._stack.currentIndex() == 2
+    assert hasattr(window, "_tasks_page")
+
+    # Smoke test: quick add a task
+    tasks_page = window._tasks_page
+    tasks_page._quick_title.setText("Smoke task")
+    tasks_page._on_quick_add()
+    assert tasks_page._table.rowCount() == 1
