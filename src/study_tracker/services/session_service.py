@@ -254,6 +254,7 @@ def get_all(
     date_from: str | None = None,
     date_to: str | None = None,
     session_type: str | None = None,
+    notes_query: str | None = None,
 ) -> list[Session]:
     return sessions_repo.get_all(
         conn,
@@ -262,4 +263,5 @@ def get_all(
         date_from=date_from,
         date_to=date_to,
         session_type=session_type,
+        notes_query=notes_query,
     )

@@ -52,3 +52,16 @@ def test_main_window_navigates_to_tasks(qtbot, db_conn):
     tasks_page._quick_title.setText("Smoke task")
     tasks_page._on_quick_add()
     assert tasks_page._table.rowCount() == 1
+
+
+def test_main_window_navigates_to_history(qtbot, db_conn):
+    clock = FakeClock()
+    signals = AppSignals()
+    window = MainWindow(signals, conn=db_conn, clock=clock)
+    qtbot.addWidget(window)
+    window.show()
+
+    # Navigate to history page (index 3)
+    window._navigate(3)
+    assert window._stack.currentIndex() == 3
+    assert hasattr(window, "_history_page")

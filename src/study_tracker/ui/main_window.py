@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from study_tracker.core.clock import Clock
+from study_tracker.ui.pages.history_page import HistoryPage
 from study_tracker.ui.pages.subjects_page import SubjectsPage
 from study_tracker.ui.pages.tasks_page import TasksPage
 from study_tracker.ui.sidebar import Sidebar
@@ -144,6 +145,9 @@ class MainWindow(QMainWindow):
             elif name == "Tasks" and self._conn is not None:
                 self._tasks_page = TasksPage(self._conn, self._signals, self._clock)
                 self._stack.addWidget(self._tasks_page)
+            elif name == "History" and self._conn is not None:
+                self._history_page = HistoryPage(self._conn, self._signals, self._clock)
+                self._stack.addWidget(self._history_page)
             else:
                 self._stack.addWidget(PlaceholderPage(name))
         right_layout.addWidget(self._stack)

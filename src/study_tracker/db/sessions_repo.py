@@ -54,6 +54,7 @@ def get_all(
     date_from: str | None = None,
     date_to: str | None = None,
     session_type: str | None = None,
+    notes_query: str | None = None,
 ) -> list[Session]:
     sql = "SELECT * FROM sessions WHERE 1=1"
     params: list = []
@@ -72,6 +73,9 @@ def get_all(
     if session_type is not None:
         sql += " AND session_type = ?"
         params.append(session_type)
+    if notes_query is not None and notes_query.strip():
+        sql += " AND notes LIKE ?"
+        params.append(f"%{notes_query.strip()}%")
     sql += " ORDER BY local_date DESC, COALESCE(start_utc, created_at) DESC"
     return [_row_to_session(r) for r in conn.execute(sql, params).fetchall()]
 
