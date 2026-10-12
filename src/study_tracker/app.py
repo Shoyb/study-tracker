@@ -4,7 +4,7 @@ Responsibilities:
 1. Enforce single-instance using a lock file.
 2. Configure logging.
 3. Load the stylesheet.
-4. Open (or create) the database.
+4. Open (or create) the database (migrate + quick_check + auto-backup).
 5. Show the main window.
 """
 
@@ -12,12 +12,21 @@ from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 import sys
 
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from study_tracker.core import paths
+from study_tracker.core.errors import DatabaseError
 from study_tracker.core.logging_setup import configure_logging
+from study_tracker.db.connection import get_connection, quick_check
+from study_tracker.db.migrate import log_row_counts, run_migrations
+from study_tracker.services.backup_service import (
+    create_backup,
+    list_backups,
+    prune_backups,
+)
 from study_tracker.ui.main_window import MainWindow
 from study_tracker.ui.signals import AppSignals
 
@@ -69,6 +78,67 @@ def _load_stylesheet(app: QApplication) -> None:
         log.warning("Stylesheet not found at %s.", qss_path)
 
 
+def _open_database() -> sqlite3.Connection:
+    """Open, migrate and integrity-check the database.
+
+    If the database file is missing but backups exist, logs a warning and
+    returns a fresh database (the UI will offer a restore dialog in a later
+    milestone).
+    """
+    db_path = paths.db_path()
+    backup_dir = paths.backup_dir()
+
+    if not db_path.exists() and list_backups(backup_dir):
+        log.warning(
+            "Database not found at %s but %d backup(s) exist in %s. "
+            "Starting fresh – use Settings > Restore to recover data.",
+            db_path,
+            len(list_backups(backup_dir)),
+            backup_dir,
+        )
+
+    conn = get_connection(db_path)
+    run_migrations(conn, db_path)
+
+    if not quick_check(conn):
+        raise DatabaseError(
+            f"Database integrity check failed: {db_path}\n"
+            "Try restoring from a backup via Settings > Data."
+        )
+
+    log_row_counts(conn)
+    log.info("Database opened: %s", db_path)
+    return conn
+
+
+def _auto_backup(conn: sqlite3.Connection) -> None:
+    """Create a daily automatic backup and prune old ones."""
+    settings_val = None
+    try:
+        from study_tracker.db import settings_repo
+        settings_val = settings_repo.get(conn, "auto_backup")
+    except Exception:
+        pass
+
+    if settings_val == "0":
+        return
+
+    try:
+        keep_str = None
+        try:
+            from study_tracker.db import settings_repo
+            keep_str = settings_repo.get(conn, "backup_copies")
+        except Exception:
+            pass
+        keep = int(keep_str or "10")
+
+        backup_dir = paths.backup_dir()
+        create_backup(conn, backup_dir)
+        prune_backups(backup_dir, keep=keep)
+    except Exception as exc:
+        log.warning("Auto-backup failed (non-fatal): %s", exc)
+
+
 class Application(QApplication):
     """Subclass of QApplication that owns the startup sequence."""
 
@@ -80,13 +150,10 @@ class Application(QApplication):
 
         # 1. Logging (before anything else so errors are recorded).
         configure_logging(paths.log_path())
-        log.info(
-            "Study Tracker starting. Data dir: %s", paths.data_dir()
-        )
+        log.info("Study Tracker starting. Data dir: %s", paths.data_dir())
 
         # 2. Single-instance check.
         if not _acquire_lock():
-            # Show a message box even before the main window exists.
             QMessageBox.warning(
                 None,  # type: ignore[arg-type]
                 "Already running",
@@ -98,10 +165,22 @@ class Application(QApplication):
         # 3. Stylesheet.
         _load_stylesheet(self)
 
-        # 4. Signals hub.
+        # 4. Database.
+        try:
+            self._conn = _open_database()
+            _auto_backup(self._conn)
+        except DatabaseError as exc:
+            QMessageBox.critical(
+                None,  # type: ignore[arg-type]
+                "Database error",
+                str(exc),
+            )
+            sys.exit(1)
+
+        # 5. Signals hub.
         self._signals = AppSignals(self)
 
-        # 5. Main window.
+        # 6. Main window.
         self._window = MainWindow(self._signals)
         self._window.show()
 
