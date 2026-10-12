@@ -65,3 +65,35 @@ def test_main_window_navigates_to_history(qtbot, db_conn):
     window._navigate(3)
     assert window._stack.currentIndex() == 3
     assert hasattr(window, "_history_page")
+
+
+def test_main_window_navigates_to_timer_and_timer_bar(qtbot, db_conn):
+    clock = FakeClock()
+    signals = AppSignals()
+    window = MainWindow(signals, conn=db_conn, clock=clock)
+    qtbot.addWidget(window)
+    window.show()
+
+    # Navigate to timer page (index 1)
+    window._navigate(1)
+    assert window._stack.currentIndex() == 1
+    assert hasattr(window, "_timer_page")
+
+    # Start timer from UI
+    window._timer_page._on_start()
+    assert window._timer_svc.is_active
+
+    # TimerBar should be hidden on Timer page
+    assert not window._timer_bar.isVisible()
+
+    # Navigate to Tasks page (index 2) -> TimerBar must become visible
+    window._navigate(2)
+    assert window._stack.currentIndex() == 2
+    assert window._timer_bar.isVisible()
+
+    # Stop timer via TimerBar
+    window._timer_bar._on_pause_resume_clicked()
+    assert window._timer_svc.is_paused
+    window._timer_svc.discard()
+    signals.timer_state_changed.emit()
+    assert not window._timer_bar.isVisible()

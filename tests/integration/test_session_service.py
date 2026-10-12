@@ -174,7 +174,9 @@ class TestManualDuration:
 
 class TestTaskIntegration:
     def test_session_moves_todo_task_to_inprogress_and_updates_time(self, conn):
-        task = task_service.quick_add(conn, subject_id=1, title="Test Task", created_at=CLOCK.now_utc())
+        task = task_service.quick_add(
+            conn, subject_id=1, title="Test Task", created_at=CLOCK.now_utc()
+        )
         assert task.status == "todo"
         assert task.time_spent_secs == 0
 

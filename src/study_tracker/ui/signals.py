@@ -30,5 +30,8 @@ class AppSignals(QObject):
     # The calendar date has rolled over midnight.
     day_changed = Signal()
 
-    # The running timer tick (emitted every second while a timer is running).
+    # The running timer tick (emitted every tick while a timer is running).
     timer_tick = Signal()
+
+    # Emitted when timer starts, pauses, resumes, stops, or is recovered/discarded.
+    timer_state_changed = Signal()

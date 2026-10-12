@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import random
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from study_tracker.db.sessions_repo import Session
 from study_tracker.domain.allocation import allocate_by_day
@@ -81,7 +79,8 @@ class TestAllocateByDay:
         assert res == {"2026-10-13": 1800, "2026-10-14": 1800}
 
     def test_span_over_three_days(self):
-        # 2026-10-13 22:00:00 to 2026-10-15 02:00:00 (2h on day 1, 24h on day 2, 2h on day 3 = 28h total span)
+        # 2026-10-13 22:00:00 to 2026-10-15 02:00:00
+        # (2h on day 1, 24h on day 2, 2h on day 3 = 28h total span)
         s = make_session(
             local_date="2026-10-13",
             start_utc="2026-10-13T22:00:00Z",
@@ -97,7 +96,7 @@ class TestAllocateByDay:
 
     def test_randomised_sum_invariance(self):
         """Allocations must always sum to duration_secs exactly."""
-        base = datetime(2026, 10, 10, 0, 0, 0, tzinfo=timezone.utc)
+        base = datetime(2026, 10, 10, 0, 0, 0, tzinfo=UTC)
         rng = random.Random(42)
 
         for _ in range(100):

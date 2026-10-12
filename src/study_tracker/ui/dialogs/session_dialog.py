@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from PySide6.QtCore import QDate, QTime
 from PySide6.QtWidgets import (
@@ -23,7 +23,6 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from study_tracker.core.errors import AppError
 from study_tracker.core.formatting import format_duration
 from study_tracker.db.sessions_repo import Session
 from study_tracker.services import subject_service, task_service
@@ -231,8 +230,14 @@ class SessionDialog(QDialog):
         if sess.start_utc and sess.end_utc:
             self._timed_radio.setChecked(True)
             offset = timedelta(minutes=sess.utc_offset_mins)
-            s_dt = datetime.strptime(sess.start_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) + offset
-            e_dt = datetime.strptime(sess.end_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) + offset
+            s_dt = (
+                datetime.strptime(sess.start_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+                + offset
+            )
+            e_dt = (
+                datetime.strptime(sess.end_utc, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
+                + offset
+            )
             self._start_time.setTime(QTime(s_dt.hour, s_dt.minute))
             self._end_time.setTime(QTime(e_dt.hour, e_dt.minute))
             self._update_calculated_duration()

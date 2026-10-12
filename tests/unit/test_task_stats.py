@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from study_tracker.db.tasks_repo import Task
 from study_tracker.domain.stats import estimated_work_remaining, is_overdue, next_up, overdue_days
 
@@ -69,7 +67,9 @@ class TestNextUpOrdering:
         t_high = make_task(4, title="High prio", priority="high")
         # 4. In progress vs todo (both medium priority)
         t_in_prog = make_task(5, title="In progress", status="in_progress", priority="medium")
-        t_todo = make_task(6, title="Todo", status="todo", priority="medium", created_at="2026-10-02T00:00:00Z")
+        t_todo = make_task(
+            6, title="Todo", status="todo", priority="medium", created_at="2026-10-02T00:00:00Z"
+        )
         # 5. Oldest created first
         t_older = make_task(7, title="Older", created_at="2026-09-01T00:00:00Z")
 
@@ -78,7 +78,10 @@ class TestNextUpOrdering:
         # Archived task should be excluded
         t_archived = make_task(9, title="Archived", archived=True, due_date="2026-10-01")
 
-        all_tasks = [t_todo, t_high, t_archived, t_due_soon, t_overdue_1, t_done, t_overdue_2, t_in_prog, t_older]
+        all_tasks = [
+            t_todo, t_high, t_archived, t_due_soon, t_overdue_1,
+            t_done, t_overdue_2, t_in_prog, t_older,
+        ]
         ordered = next_up(all_tasks, today=today, limit=5)
 
         # Expected top 5:
@@ -96,7 +99,8 @@ class TestEstimatedWorkRemaining:
         t2 = make_task(2, estimate_secs=1800, time_spent_secs=2000)  # remaining 0 (exceeded)
         t3 = make_task(3, estimate_secs=None)                         # no estimate
         t4 = make_task(4, status="done", estimate_secs=3600, time_spent_secs=0)  # done -> ignored
-        t5 = make_task(5, archived=True, estimate_secs=3600, time_spent_secs=0)  # archived -> ignored
+        # archived -> ignored
+        t5 = make_task(5, archived=True, estimate_secs=3600, time_spent_secs=0)
 
         rem_secs, no_est = estimated_work_remaining([t1, t2, t3, t4, t5])
         assert rem_secs == 2400

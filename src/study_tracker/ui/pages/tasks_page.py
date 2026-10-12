@@ -64,7 +64,8 @@ class TasksPage(QWidget):
         # 1. Header & Next Up Summary Strip
         self._next_up_panel = QFrame()
         self._next_up_panel.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E0E0E0; border-radius: 6px; padding: 10px; }"
+            "QFrame { background-color: #FFFFFF; border: 1px solid #E0E0E0; "
+            "border-radius: 6px; padding: 10px; }"
         )
         next_up_layout = QVBoxLayout(self._next_up_panel)
         next_up_layout.setContentsMargins(8, 8, 8, 8)
@@ -155,12 +156,10 @@ class TasksPage(QWidget):
             "Status", "Title", "Subject", "Priority", "Due Date", "Progress", "Actions"
         ])
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self._table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        for c in (0, 2, 3, 4, 5, 6):
+            self._table.horizontalHeader().setSectionResizeMode(
+                c, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._table.setSortingEnabled(True)
         self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self._table)
@@ -209,7 +208,11 @@ class TasksPage(QWidget):
         if top_tasks:
             parts = []
             for i, t in enumerate(top_tasks, 1):
-                overdue_badge = f" <font color='#D32F2F'><b>[Overdue {overdue_days(t, today)}d]</b></font>" if is_overdue(t, today) else ""
+                overdue_badge = (
+                    f" <font color='#D32F2F'><b>[Overdue {overdue_days(t, today)}d]</b></font>"
+                    if is_overdue(t, today)
+                    else ""
+                )
                 parts.append(f"{i}. <b>{t.title}</b> ({t.priority}){overdue_badge}")
             self._next_up_content.setText("  •  ".join(parts))
         else:
@@ -255,7 +258,9 @@ class TasksPage(QWidget):
             elif sel_due == "next7":
                 if not t.due_date:
                     continue
-                next7 = (datetime.strptime(today, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
+                next7 = (
+                    datetime.strptime(today, "%Y-%m-%d") + timedelta(days=7)
+                ).strftime("%Y-%m-%d")
                 if not (today <= t.due_date <= next7) or t.status == "done":
                     continue
             elif sel_due == "nodue":
@@ -274,7 +279,9 @@ class TasksPage(QWidget):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(tasks))
         today = self._clock.local_date()
-        all_subjects_map = {s.id: s for s in subject_service.get_all(self._conn, include_archived=True)}
+        all_subjects_map = {
+            s.id: s for s in subject_service.get_all(self._conn, include_archived=True)
+        }
 
         for row, t in enumerate(tasks):
             # 0. Status Toggle / Complete button
@@ -300,7 +307,8 @@ class TasksPage(QWidget):
             # 3. Priority
             prio_item = QTableWidgetItem(t.priority.capitalize())
             # For numeric sort
-            prio_item.setData(Qt.ItemDataRole.UserRole, {"high": 1, "medium": 2, "low": 3}.get(t.priority, 2))
+            prio_rank = {"high": 1, "medium": 2, "low": 3}.get(t.priority, 2)
+            prio_item.setData(Qt.ItemDataRole.UserRole, prio_rank)
             if t.priority == "high":
                 prio_item.setForeground(Qt.GlobalColor.red)
             self._table.setItem(row, 3, prio_item)

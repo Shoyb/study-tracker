@@ -27,7 +27,9 @@ CLOCK = FakeClock("2026-10-13T00:00:00Z")
 
 class TestTaskServiceCreate:
     def test_quick_add(self, conn):
-        task = task_service.quick_add(conn, subject_id=1, title="Read chapter 1", created_at=CLOCK.now_utc())
+        task = task_service.quick_add(
+            conn, subject_id=1, title="Read chapter 1", created_at=CLOCK.now_utc()
+        )
         assert task.id > 0
         assert task.title == "Read chapter 1"
         assert task.status == "todo"
@@ -94,7 +96,8 @@ class TestTaskDelete:
             """INSERT INTO sessions
                (uuid, subject_id, task_id, local_date, duration_secs,
                 session_type, notes, utc_offset_mins, created_at)
-               VALUES ('u-task', 1, ?, '2026-10-13', 3600, 'timer', '', 0, '2026-10-13T00:00:00Z')""",
+               VALUES ('u-task', 1, ?, '2026-10-13', 3600, 'timer', '',
+                       0, '2026-10-13T00:00:00Z')""",
             (task.id,),
         )
         with pytest.raises(ConflictError, match="study sessions"):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from study_tracker.core.errors import ConflictError, NotFoundError, ValidationError
 from study_tracker.db import sessions_repo, subjects_repo, tasks_repo
@@ -30,7 +30,7 @@ def _assert_task_exists(conn: sqlite3.Connection, task_id: int) -> None:
 
 
 def _derive_local_date(utc_iso: str, utc_offset_mins: int) -> str:
-    dt_utc = datetime.strptime(utc_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    dt_utc = datetime.strptime(utc_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
     local_dt = dt_utc + timedelta(minutes=utc_offset_mins)
     return local_dt.strftime("%Y-%m-%d")
 
@@ -86,7 +86,8 @@ def add_manual_timed(
     validate_duration_secs(duration_secs)
     if duration_secs > span_secs:
         raise ValidationError(
-            f"Duration ({duration_secs}s) cannot exceed time span between start and end ({span_secs}s)."
+            f"Duration ({duration_secs}s) cannot exceed time span between start and "
+            f"end ({span_secs}s)."
         )
 
     # Overlap check
@@ -94,7 +95,8 @@ def add_manual_timed(
     if overlapping:
         conflict = overlapping[0]
         raise ConflictError(
-            f"Session overlaps with an existing session (ID {conflict.id}: {conflict.start_utc} to {conflict.end_utc})."
+            f"Session overlaps with an existing session (ID {conflict.id}: "
+            f"{conflict.start_utc} to {conflict.end_utc})."
         )
 
     local_date = _derive_local_date(start_utc, utc_offset_mins)
@@ -144,8 +146,8 @@ def add_manual_duration(
     curr_total = sessions_repo.total_secs_for_date(conn, local_date)
     if curr_total + duration_secs > 86400:
         raise ValidationError(
-            f"Cannot add {duration_secs // 3600}h: daily total for {local_date} would exceed 24 hours "
-            f"(already {curr_total // 3600}h recorded)."
+            f"Cannot add {duration_secs // 3600}h: daily total for {local_date} would "
+            f"exceed 24 hours (already {curr_total // 3600}h recorded)."
         )
 
     sess_uuid = str(uuid.uuid4())
@@ -215,7 +217,8 @@ def update(
         if overlapping:
             conflict = overlapping[0]
             raise ConflictError(
-                f"Session overlaps with session {conflict.id} ({conflict.start_utc} to {conflict.end_utc})."
+                f"Session overlaps with session {conflict.id} "
+                f"({conflict.start_utc} to {conflict.end_utc})."
             )
         local_date = _derive_local_date(start_utc, utc_offset_mins)
 

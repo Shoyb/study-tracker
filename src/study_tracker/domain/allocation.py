@@ -5,7 +5,7 @@ Pure functions – no Qt, no SQL.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,10 +29,10 @@ def allocate_by_day(session: Session) -> dict[str, int]:
     offset = timedelta(minutes=session.utc_offset_mins)
 
     start_utc = datetime.strptime(session.start_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
+        tzinfo=UTC
     )
     end_utc = datetime.strptime(session.end_utc, "%Y-%m-%dT%H:%M:%SZ").replace(
-        tzinfo=timezone.utc
+        tzinfo=UTC
     )
 
     start_local = (start_utc + offset).replace(tzinfo=None)

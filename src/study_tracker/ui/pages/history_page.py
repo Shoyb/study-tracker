@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -142,7 +142,9 @@ class HistoryPage(QWidget):
         ])
         self._table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeMode.Stretch)
         for col in range(7):
-            self._table.horizontalHeader().setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
+            self._table.horizontalHeader().setSectionResizeMode(
+                col, QHeaderView.ResizeMode.ResizeToContents
+            )
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setSortingEnabled(True)
@@ -205,8 +207,16 @@ class HistoryPage(QWidget):
         self._apply_filters()
 
     def _apply_filters(self) -> None:
-        date_from = self._date_from.date().toString("yyyy-MM-dd") if self._date_from_chk.isChecked() else None
-        date_to = self._date_to.date().toString("yyyy-MM-dd") if self._date_to_chk.isChecked() else None
+        date_from = (
+            self._date_from.date().toString("yyyy-MM-dd")
+            if self._date_from_chk.isChecked()
+            else None
+        )
+        date_to = (
+            self._date_to.date().toString("yyyy-MM-dd")
+            if self._date_to_chk.isChecked()
+            else None
+        )
         subject_id = self._filter_subj.currentData()
         task_id = self._filter_task.currentData()
         session_type = self._filter_type.currentData()
@@ -277,8 +287,10 @@ class HistoryPage(QWidget):
 
         self._table.setSortingEnabled(True)
         count = len(self._sessions)
+        plural = "s" if count != 1 else ""
+        tot_str = format_duration(total_secs)
         self._footer_label.setText(
-            f"Showing {count} session{'s' if count != 1 else ''}  |  Total: <b>{format_duration(total_secs)}</b>"
+            f"Showing {count} session{plural}  |  Total: <b>{tot_str}</b>"
         )
         self._on_selection_changed()
 
