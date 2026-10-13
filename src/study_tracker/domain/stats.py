@@ -28,16 +28,18 @@ def _dates_in_range(start: str, end: str) -> Iterable[str]:
         start_date += timedelta(days=1)
 
 
-def daily_totals(sessions: Iterable[Session], start: str, end: str) -> dict[str, int]:
+def daily_totals(
+    sessions: Iterable[Session], start: str, end: str, cutoff_minutes: int = 180
+) -> dict[str, int]:
     """Return allocated study seconds for every day in an inclusive range.
 
     ``allocate_by_day`` is intentionally the only place where a session is
-    split at midnight.  Keeping that rule here makes the Dashboard, Calendar,
-    and later charts agree exactly.
+    split at the study-day boundary. Keeping that rule here makes all reports
+    agree exactly.
     """
     totals = {day: 0 for day in _dates_in_range(start, end)}
     for session in sessions:
-        for day, seconds in allocate_by_day(session).items():
+        for day, seconds in allocate_by_day(session, cutoff_minutes).items():
             if day in totals:
                 totals[day] += seconds
     return totals
@@ -97,21 +99,25 @@ def _allocation_overlaps_range(allocation: dict[str, int], start: str, end: str)
     return any(start <= day <= end and seconds > 0 for day, seconds in allocation.items())
 
 
-def session_count(sessions: Iterable[Session], start: str, end: str) -> int:
+def session_count(
+    sessions: Iterable[Session], start: str, end: str, cutoff_minutes: int = 180
+) -> int:
     """Count a session once when any allocated second falls in the range."""
     return sum(
-        _allocation_overlaps_range(allocate_by_day(session), start, end)
+        _allocation_overlaps_range(allocate_by_day(session, cutoff_minutes), start, end)
         for session in sessions
     )
 
 
-def subject_totals(sessions: Iterable[Session], start: str, end: str) -> dict[int, int]:
+def subject_totals(
+    sessions: Iterable[Session], start: str, end: str, cutoff_minutes: int = 180
+) -> dict[int, int]:
     """Return allocated time per subject for an inclusive date range."""
     result: dict[int, int] = {}
     for session in sessions:
         seconds = sum(
             value
-            for day, value in allocate_by_day(session).items()
+            for day, value in allocate_by_day(session, cutoff_minutes).items()
             if start <= day <= end
         )
         if seconds:

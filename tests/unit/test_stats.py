@@ -80,7 +80,7 @@ class TestDailyTotals:
             end_utc="2026-10-11T01:00:00Z",
             duration_secs=7200,
         )
-        totals = stats.daily_totals([s], "2026-10-10", "2026-10-12")
+        totals = stats.daily_totals([s], "2026-10-10", "2026-10-12", cutoff_minutes=0)
         assert totals["2026-10-10"] == 3600
         assert totals["2026-10-11"] == 3600
         assert totals["2026-10-12"] == 0

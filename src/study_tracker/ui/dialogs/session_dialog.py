@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from study_tracker.core.formatting import format_duration
+from study_tracker.db import settings_repo
 from study_tracker.db.sessions_repo import Session
 from study_tracker.services import subject_service, task_service
 from study_tracker.ui.widgets.confirm import warn
@@ -47,6 +48,9 @@ class SessionDialog(QDialog):
         self._session = session
         self._default_subject_id = default_subject_id
         self._default_task_id = default_task_id
+        self._cutoff_minutes = int(
+            settings_repo.get(self._conn, "day_cutoff_minutes") or "180"
+        )
 
         self.setWindowTitle("Edit Session" if session else "Add Session")
         self.setMinimumWidth(440)
@@ -102,6 +106,7 @@ class SessionDialog(QDialog):
         self._date_edit.setCalendarPopup(True)
         today_str = self._clock.local_date()
         self._date_edit.setDate(QDate.fromString(today_str, "yyyy-MM-dd"))
+        self._date_edit.dateChanged.connect(self._update_resolved_start)
         form.addRow("Date:", self._date_edit)
 
         # Timed Widgets Container
@@ -117,6 +122,7 @@ class SessionDialog(QDialog):
         self._start_time.setDisplayFormat("HH:mm")
         self._start_time.setTime(QTime(9, 0))
         self._start_time.timeChanged.connect(self._update_calculated_duration)
+        self._start_time.timeChanged.connect(self._update_resolved_start)
 
         self._end_time = QTimeEdit()
         self._end_time.setDisplayFormat("HH:mm")
@@ -132,6 +138,8 @@ class SessionDialog(QDialog):
 
         self._calc_dur_label = QLabel("Calculated duration: <b>1 h 00 min</b>")
         timed_layout.addRow("", self._calc_dur_label)
+        self._resolved_start_label = QLabel()
+        timed_layout.addRow("Resolved start:", self._resolved_start_label)
         form.addRow(self._timed_container)
 
         # Duration-only Widgets Container
@@ -173,6 +181,7 @@ class SessionDialog(QDialog):
         layout.addWidget(buttons)
 
         self._update_calculated_duration()
+        self._update_resolved_start()
 
     def _on_mode_toggled(self) -> None:
         is_timed = self._timed_radio.isChecked()
@@ -210,6 +219,16 @@ class SessionDialog(QDialog):
             # Crosses midnight into next day
             diff += 86400
         self._calc_dur_label.setText(f"Calculated duration: <b>{format_duration(diff)}</b>")
+
+    def _update_resolved_start(self) -> None:
+        day = self._date_edit.date()
+        start_time = self._start_time.time()
+        if start_time.hour() * 60 + start_time.minute() < self._cutoff_minutes:
+            day = day.addDays(1)
+        value = datetime(
+            day.year(), day.month(), day.day(), start_time.hour(), start_time.minute()
+        )
+        self._resolved_start_label.setText(value.strftime("%a %d %b %Y, %H:%M"))
 
     def _populate(self, sess: Session) -> None:
         # Subject
@@ -307,6 +326,8 @@ class SessionDialog(QDialog):
         st = self._start_time.time()
         et = self._end_time.time()
 
+        if st.hour() * 60 + st.minute() < self._cutoff_minutes:
+            qd = qd.addDays(1)
         start_local = datetime(qd.year(), qd.month(), qd.day(), st.hour(), st.minute(), 0)
         end_local = datetime(qd.year(), qd.month(), qd.day(), et.hour(), et.minute(), 0)
         if end_local <= start_local:

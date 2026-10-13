@@ -14,7 +14,6 @@ Rules (enforced by the runner):
 from __future__ import annotations
 
 import logging
-import shutil
 import sqlite3
 from pathlib import Path
 
@@ -25,12 +24,19 @@ _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 
 
 def _migration_files() -> list[tuple[int, Path]]:
-    """Return ``[(version_number, path), ...]`` sorted by version, starting at 1."""
+    """Return migration files supported by the current application release.
+
+    Version 8 activates exam definitions and scoring. Later extension
+    migrations remain inactive until their features are integrated.
+    """
     result: list[tuple[int, Path]] = []
     for p in _MIGRATIONS_DIR.glob("*.sql"):
-        stem = p.stem  # e.g. "001_initial"
+        stem = p.stem
         try:
             num = int(stem.split("_")[0])
+            if num > 8:
+                log.info("Ignoring unsupported future migration file: %s", p.name)
+                continue
             result.append((num, p))
         except (ValueError, IndexError):
             log.warning("Skipping unrecognised migration file: %s", p)
@@ -41,14 +47,19 @@ def _get_user_version(conn: sqlite3.Connection) -> int:
     return conn.execute("PRAGMA user_version;").fetchone()[0]
 
 
-def _make_safety_copy(db_path: Path, version: int) -> None:
-    """Copy the database file before applying migration ``version``."""
+def _make_safety_copy(conn: sqlite3.Connection, db_path: Path, version: int) -> None:
+    """Back up the live database, including WAL contents, before a migration."""
     dest = db_path.parent / f"{db_path.stem}.before_m{version:03d}{db_path.suffix}"
+    dest_conn: sqlite3.Connection | None = None
     try:
-        shutil.copy2(str(db_path), str(dest))
+        dest_conn = sqlite3.connect(str(dest))
+        conn.backup(dest_conn)
         log.info("Safety copy created: %s", dest)
-    except OSError as exc:
+    except (OSError, sqlite3.Error) as exc:
         log.warning("Could not create safety copy: %s", exc)
+    finally:
+        if dest_conn is not None:
+            dest_conn.close()
 
 
 def run_migrations(conn: sqlite3.Connection, db_path: Path) -> None:
@@ -80,7 +91,7 @@ def run_migrations(conn: sqlite3.Connection, db_path: Path) -> None:
 
         log.info("Applying migration %03d from %s …", version, path.name)
         if db_path.exists() and db_path.stat().st_size > 0:
-            _make_safety_copy(db_path, version)
+            _make_safety_copy(conn, db_path, version)
 
         sql = path.read_text(encoding="utf-8")
         # executescript commits any open transaction and then runs the SQL.

@@ -12,6 +12,11 @@ _DEFAULTS: dict[str, str] = {
     "chart_range_days": "30",
     "auto_backup": "1",
     "backup_copies": "10",
+    "day_cutoff_minutes": "180",
+    "wake_minutes": "420",
+    "undo_keep_entries": "500",
+    "undo_keep_days": "30",
+    "pomodoro_sound": "0",
 }
 
 

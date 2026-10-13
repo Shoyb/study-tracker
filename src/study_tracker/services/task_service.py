@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import date
 
-from study_tracker.core.errors import ConflictError, NotFoundError
+from study_tracker.core.errors import ConflictError, NotFoundError, ValidationError
 from study_tracker.db import subjects_repo, tasks_repo
 from study_tracker.db.tasks_repo import Task
 from study_tracker.domain.validation import (
@@ -13,8 +14,11 @@ from study_tracker.domain.validation import (
     validate_task_status,
     validate_task_title,
 )
+from study_tracker.services.undo.adapters import snapshot
+from study_tracker.services.undo.journal import JournalService
 
 log = logging.getLogger(__name__)
+_UNSET = object()
 
 
 def _assert_subject_exists(conn: sqlite3.Connection, subject_id: int) -> None:
@@ -49,18 +53,20 @@ def create(
     if status == "done" and not completed_at:
         completed_at = created_at
 
-    new_id = tasks_repo.insert(
-        conn,
-        subject_id=subject_id,
-        title=title,
-        status=status,
-        priority=priority,
-        due_date=due_date or None,
-        estimate_secs=estimate_secs,
-        notes=notes.strip(),
-        completed_at=completed_at,
-        created_at=created_at,
-    )
+    with JournalService(conn).action("Create task", created_at) as record:
+        new_id = tasks_repo.insert(
+            conn,
+            subject_id=subject_id,
+            title=title,
+            status=status,
+            priority=priority,
+            due_date=due_date or None,
+            estimate_secs=estimate_secs,
+            notes=notes.strip(),
+            completed_at=completed_at,
+            created_at=created_at,
+        )
+        record("task", new_id, "create", None, snapshot(conn, "task", new_id))
     log.info("Task created: id=%d title=%r", new_id, title)
     task = tasks_repo.get_by_id(conn, new_id)
     assert task is not None
@@ -98,8 +104,10 @@ def update(
     estimate_secs: int | None,
     notes: str,
     completed_at: str | None,
+    scheduled_date: str | None | object = _UNSET,
+    now_utc: str | None = None,
 ) -> Task:
-    _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
+    existing = _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
     _assert_subject_exists(conn, subject_id)
     title = validate_task_title(title)
     status = validate_task_status(status)
@@ -109,24 +117,82 @@ def update(
         raise ValueError("Completed task must have completed_at timestamp.")
     if status != "done":
         completed_at = None
+    scheduled_value = existing.scheduled_date if scheduled_date is _UNSET else scheduled_date
+    if scheduled_value is not None and not isinstance(scheduled_value, str):
+        raise TypeError("scheduled_date must be a date string or None")
 
-    tasks_repo.update(
-        conn,
-        task_id,
-        subject_id=subject_id,
-        title=title,
-        status=status,
-        priority=priority,
-        archived=archived,
-        due_date=due_date or None,
-        estimate_secs=estimate_secs,
-        notes=notes.strip(),
-        completed_at=completed_at,
-    )
+    before = snapshot(conn, "task", task_id)
+    with JournalService(conn).action("Edit task", now_utc or existing.created_at) as record:
+        tasks_repo.update(
+            conn,
+            task_id,
+            subject_id=subject_id,
+            title=title,
+            status=status,
+            priority=priority,
+            archived=archived,
+            due_date=due_date or None,
+            estimate_secs=estimate_secs,
+            notes=notes.strip(),
+            completed_at=completed_at,
+            scheduled_date=scheduled_value,
+        )
+        record("task", task_id, "update", before, snapshot(conn, "task", task_id))
     log.info("Task %d updated.", task_id)
     task = tasks_repo.get_by_id(conn, task_id)
     assert task is not None
     return task
+
+
+def schedule(
+    conn: sqlite3.Connection,
+    task_id: int,
+    scheduled_date: str | None,
+    now_utc: str,
+) -> Task:
+    schedule_many(conn, [task_id], scheduled_date, now_utc)
+    task = tasks_repo.get_by_id(conn, task_id)
+    assert task is not None
+    return task
+
+
+def schedule_many(
+    conn: sqlite3.Connection,
+    task_ids: list[int],
+    scheduled_date: str | None,
+    now_utc: str,
+) -> list[Task]:
+    if scheduled_date is not None:
+        try:
+            date.fromisoformat(scheduled_date)
+        except ValueError as exc:
+            raise ValidationError("Scheduled date must be a valid YYYY-MM-DD date.") from exc
+    tasks = [
+        _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
+        for task_id in task_ids
+    ]
+    if not tasks:
+        return []
+    summary = "Move scheduled tasks" if len(tasks) > 1 else "Schedule task"
+    with JournalService(conn).action(summary, now_utc) as record:
+        for task in tasks:
+            before = snapshot(conn, "task", task.id)
+            tasks_repo.update(
+                conn,
+                task.id,
+                subject_id=task.subject_id,
+                title=task.title,
+                status=task.status,
+                priority=task.priority,
+                archived=task.archived,
+                due_date=task.due_date,
+                estimate_secs=task.estimate_secs,
+                notes=task.notes,
+                completed_at=task.completed_at,
+                scheduled_date=scheduled_date,
+            )
+            record("task", task.id, "update", before, snapshot(conn, "task", task.id))
+    return [tasks_repo.get_by_id(conn, task.id) for task in tasks]
 
 
 def complete(conn: sqlite3.Connection, task_id: int, completed_at: str) -> Task:
@@ -143,10 +209,12 @@ def complete(conn: sqlite3.Connection, task_id: int, completed_at: str) -> Task:
         estimate_secs=task.estimate_secs,
         notes=task.notes,
         completed_at=completed_at,
+        scheduled_date=task.scheduled_date,
+        now_utc=completed_at,
     )
 
 
-def reopen(conn: sqlite3.Connection, task_id: int) -> Task:
+def reopen(conn: sqlite3.Connection, task_id: int, now_utc: str | None = None) -> Task:
     task = _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
     return update(
         conn,
@@ -160,10 +228,12 @@ def reopen(conn: sqlite3.Connection, task_id: int) -> Task:
         estimate_secs=task.estimate_secs,
         notes=task.notes,
         completed_at=None,
+        scheduled_date=task.scheduled_date,
+        now_utc=now_utc,
     )
 
 
-def archive(conn: sqlite3.Connection, task_id: int) -> Task:
+def archive(conn: sqlite3.Connection, task_id: int, now_utc: str | None = None) -> Task:
     task = _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
     return update(
         conn,
@@ -177,10 +247,12 @@ def archive(conn: sqlite3.Connection, task_id: int) -> Task:
         estimate_secs=task.estimate_secs,
         notes=task.notes,
         completed_at=task.completed_at,
+        scheduled_date=task.scheduled_date,
+        now_utc=now_utc,
     )
 
 
-def unarchive(conn: sqlite3.Connection, task_id: int) -> Task:
+def unarchive(conn: sqlite3.Connection, task_id: int, now_utc: str | None = None) -> Task:
     task = _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
     return update(
         conn,
@@ -194,16 +266,35 @@ def unarchive(conn: sqlite3.Connection, task_id: int) -> Task:
         estimate_secs=task.estimate_secs,
         notes=task.notes,
         completed_at=task.completed_at,
+        scheduled_date=task.scheduled_date,
+        now_utc=now_utc,
     )
 
 
-def delete(conn: sqlite3.Connection, task_id: int) -> None:
-    _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
+def delete(conn: sqlite3.Connection, task_id: int, now_utc: str | None = None) -> None:
+    task = _assert_task_exists(tasks_repo.get_by_id(conn, task_id), task_id)
     if tasks_repo.has_sessions(conn, task_id):
         raise ConflictError(
             "Cannot delete task with recorded study sessions. Archive the task instead."
         )
-    tasks_repo.delete(conn, task_id)
+    before = snapshot(conn, "task", task_id)
+    with JournalService(conn).action("Delete task", now_utc or task.created_at) as record:
+        linked_items = conn.execute(
+            "SELECT id FROM calendar_items WHERE task_id = ?", (task_id,)
+        ).fetchall()
+        linked_before = {
+            row["id"]: snapshot(conn, "calendar_item", row["id"]) for row in linked_items
+        }
+        tasks_repo.delete(conn, task_id)
+        for item_id, item_before in linked_before.items():
+            record(
+                "calendar_item",
+                item_id,
+                "update",
+                item_before,
+                snapshot(conn, "calendar_item", item_id),
+            )
+        record("task", task_id, "delete", before, None)
     log.info("Task %d deleted.", task_id)
 
 

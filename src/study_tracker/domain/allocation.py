@@ -8,20 +8,17 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from study_tracker.domain.day import day_bounds, study_date
+
 if TYPE_CHECKING:
     from study_tracker.db.sessions_repo import Session
 
 
-def allocate_by_day(session: Session) -> dict[str, int]:
-    """Allocate a session's duration_secs to local calendar days.
+def allocate_by_day(session: Session, cutoff_minutes: int = 180) -> dict[str, int]:
+    """Allocate a session across the configured study days.
 
-    Rules from section G:
-    - Duration-only entries: all seconds belong to session.local_date.
-    - Timed sessions that stay within one local day: all seconds belong to that day.
-    - Timed sessions crossing midnight: span cut at each local midnight.
-      duration_secs shared in proportion to seconds of span falling on each day,
-      using integer arithmetic with the remainder given to the last day,
-      so the parts always add up to stored duration_secs exactly.
+    Timed sessions are split at the configured study-day boundary. A cutoff of
+    180 minutes means each study day runs from 03:00 to 03:00 local time.
     """
     if not session.start_utc or not session.end_utc:
         return {session.local_date: session.duration_secs}
@@ -38,42 +35,36 @@ def allocate_by_day(session: Session) -> dict[str, int]:
     start_local = (start_utc + offset).replace(tzinfo=None)
     end_local = (end_utc + offset).replace(tzinfo=None)
 
-    start_date_str = start_local.strftime("%Y-%m-%d")
-    end_date_str = end_local.strftime("%Y-%m-%d")
-
-    if start_date_str == end_date_str:
-        return {start_date_str: session.duration_secs}
+    if (
+        start_local.date() == end_local.date()
+        and study_date(start_local, cutoff_minutes) == study_date(end_local, cutoff_minutes)
+    ):
+        return {study_date(start_local, cutoff_minutes): session.duration_secs}
 
     total_span_secs = int((end_local - start_local).total_seconds())
     if total_span_secs <= 0:
         return {session.local_date: session.duration_secs}
 
-    # Slice the span by local midnight
     spans: list[tuple[str, int]] = []
     curr_start = start_local
 
     while curr_start < end_local:
-        curr_date_str = curr_start.strftime("%Y-%m-%d")
-        next_midnight = datetime(
-            curr_start.year, curr_start.month, curr_start.day
-        ) + timedelta(days=1)
-
-        curr_end = min(next_midnight, end_local)
+        current_day = study_date(curr_start, cutoff_minutes)
+        _, next_boundary = day_bounds(current_day, cutoff_minutes)
+        curr_end = min(next_boundary, end_local)
         span_secs = int((curr_end - curr_start).total_seconds())
         if span_secs > 0:
-            spans.append((curr_date_str, span_secs))
-        curr_start = next_midnight
+            spans.append((current_day, span_secs))
+        curr_start = curr_end
 
     if not spans:
         return {session.local_date: session.duration_secs}
 
-    # Allocate duration_secs proportionally
     result: dict[str, int] = {}
     allocated_so_far = 0
 
     for i, (date_str, span_secs) in enumerate(spans):
         if i == len(spans) - 1:
-            # Last day gets whatever remains so total == session.duration_secs
             day_dur = session.duration_secs - allocated_so_far
         else:
             day_dur = int(session.duration_secs * span_secs / total_span_secs)

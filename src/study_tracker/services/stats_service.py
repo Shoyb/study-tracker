@@ -46,11 +46,12 @@ def dashboard_stats(
     end = date.fromisoformat(today)
     start = end - timedelta(days=range_days - 1)
     start_text, end_text = start.isoformat(), end.isoformat()
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
     sessions = _sessions_for_range(conn, start_text, end_text)
-    daily = stats.daily_totals(sessions, start_text, end_text)
+    daily = stats.daily_totals(sessions, start_text, end_text, cutoff_minutes)
     daily_session_counts = {day: 0 for day in daily}
     for session in sessions:
-        for day, seconds in allocation.allocate_by_day(session).items():
+        for day, seconds in allocation.allocate_by_day(session, cutoff_minutes).items():
             if day in daily_session_counts and seconds:
                 daily_session_counts[day] += 1
 
@@ -63,7 +64,7 @@ def dashboard_stats(
     )
     month_start = end.replace(day=1).isoformat()
     month_daily = stats.daily_totals(
-        _sessions_for_range(conn, month_start, end_text), month_start, end_text
+        _sessions_for_range(conn, month_start, end_text), month_start, end_text, cutoff_minutes
     )
     threshold_hours = float(settings_repo.get(conn, "streak_threshold_hrs") or "0.5")
     tasks = tasks_repo.get_all(conn, include_archived=True)
@@ -74,7 +75,7 @@ def dashboard_stats(
         week_secs=current_week,
         month_secs=sum(month_daily.values()),
         daily_average_secs=average,
-        session_count=stats.session_count(sessions, start_text, end_text),
+        session_count=stats.session_count(sessions, start_text, end_text, cutoff_minutes),
         current_streak=stats.current_streak(
             daily, today=today, threshold_secs=round(threshold_hours * 3600)
         ),
@@ -90,7 +91,10 @@ def totals_for_range(
     conn: sqlite3.Connection, *, start: str, end: str
 ) -> dict[str, int]:
     """Return zero-filled daily totals for a Calendar or a future chart."""
-    return stats.daily_totals(_sessions_for_range(conn, start, end), start, end)
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
+    return stats.daily_totals(
+        _sessions_for_range(conn, start, end), start, end, cutoff_minutes
+    )
 
 
 def task_time_for_range(
@@ -98,12 +102,13 @@ def task_time_for_range(
 ) -> dict[int, int]:
     """Return seconds allocated to each task in a date range."""
     totals: dict[int, int] = {}
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
     for session in _sessions_for_range(conn, start, end):
         if session.task_id is None:
             continue
         seconds = sum(
             value
-            for day, value in allocation.allocate_by_day(session).items()
+            for day, value in allocation.allocate_by_day(session, cutoff_minutes).items()
             if start <= day <= end
         )
         if seconds:

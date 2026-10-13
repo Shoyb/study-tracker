@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import date, timedelta
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -24,7 +24,10 @@ from PySide6.QtWidgets import (
 
 from study_tracker.core.errors import AppError
 from study_tracker.core.formatting import format_duration, format_duration_short, format_time
+from study_tracker.db import settings_repo
+from study_tracker.domain.allocation import allocate_by_day
 from study_tracker.services import session_service, subject_service, task_service
+from study_tracker.services.pomodoro_service import PomodoroService
 from study_tracker.services.timer_service import TimerService
 from study_tracker.ui.signals import AppSignals
 from study_tracker.ui.widgets.confirm import confirm, warn
@@ -48,6 +51,7 @@ class TimerPage(QWidget):
         self._timer = timer_svc
         self._signals = signals
         self._clock = clock
+        self._pomodoro = PomodoroService(conn, timer_svc)
 
         self._build_ui()
         self._signals.timer_tick.connect(self._on_tick)
@@ -72,6 +76,25 @@ class TimerPage(QWidget):
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(14)
         card_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        mode_row = QHBoxLayout()
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("Stopwatch", "stopwatch")
+        self._mode_combo.addItem("Pomodoro", "pomodoro")
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._preset_combo = QComboBox()
+        for preset in self._pomodoro.presets():
+            self._preset_combo.addItem(preset.name, preset.id)
+        self._skip_break_btn = QPushButton("Skip break")
+        self._skip_break_btn.clicked.connect(self._skip_break)
+        self._skip_break_btn.setEnabled(False)
+        mode_row.addWidget(QLabel("Mode:"))
+        mode_row.addWidget(self._mode_combo)
+        mode_row.addWidget(QLabel("Preset:"))
+        mode_row.addWidget(self._preset_combo)
+        mode_row.addWidget(self._skip_break_btn)
+        mode_row.addStretch()
+        card_layout.addLayout(mode_row)
 
         # Elapsed display
         self._display = QLabel("00:00:00")
@@ -180,6 +203,7 @@ class TimerPage(QWidget):
             )
         self._today_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         root.addWidget(self._today_table)
+        self._on_mode_changed()
 
     def _populate_subjects(self) -> None:
         prev = self._subject_combo.currentData()
@@ -233,8 +257,17 @@ class TimerPage(QWidget):
 
         self._subject_combo.setEnabled(not active)
         self._task_combo.setEnabled(not active)
+        self._mode_combo.setEnabled(not active)
+        self._preset_combo.setEnabled(not active)
+        self._skip_break_btn.setEnabled(
+            active
+            and self._timer.mode == "pomodoro"
+            and self._timer.phase in {"short_break", "long_break"}
+        )
 
         if active:
+            if self._timer.mode == "pomodoro":
+                self._mode_combo.setCurrentIndex(self._mode_combo.findData("pomodoro"))
             s_idx = self._subject_combo.findData(self._timer.subject_id)
             if s_idx >= 0 and self._subject_combo.currentIndex() != s_idx:
                 self._subject_combo.setCurrentIndex(s_idx)
@@ -245,7 +278,13 @@ class TimerPage(QWidget):
                 self._notes_edit.setText(self._timer.notes)
 
             self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
-            self._status_label.setText("Paused" if paused else "Running…")
+            if self._timer.mode == "pomodoro":
+                phase = (self._timer.phase or "focus").replace("_", " ").title()
+                status = "Paused" if paused else phase
+                self._status_label.setText(status)
+                self._display.setText(format_duration_short(self._timer.remaining_seconds))
+            else:
+                self._status_label.setText("Paused" if paused else "Running…")
             self._status_label.setStyleSheet(
                 "font-size: 11pt; color: #FFB870;" if paused else "font-size: 11pt; color: #7FE3A2;"
             )
@@ -257,8 +296,21 @@ class TimerPage(QWidget):
 
     def _on_tick(self) -> None:
         if self._timer.is_active:
+            previous_phase = self._timer.phase
+            completed = self._timer.advance_pomodoro_if_due(
+                self._clock.local_utc_offset_minutes()
+            )
+            if completed is not None:
+                self._signals.sessions_changed.emit()
+                self._signals.tasks_changed.emit()
+            if previous_phase != self._timer.phase and self._timer.phase is not None:
+                self._signals.pomodoro_phase_changed.emit(self._timer.phase)
+            self._sync_with_timer_state()
             secs = self._timer.elapsed_seconds()
-            self._display.setText(format_duration_short(secs))
+            if self._timer.mode == "pomodoro":
+                self._display.setText(format_duration_short(self._timer.remaining_seconds))
+            else:
+                self._display.setText(format_duration_short(secs))
 
     def _on_start(self) -> None:
         subj_id = self._subject_combo.currentData()
@@ -269,7 +321,17 @@ class TimerPage(QWidget):
         notes = self._notes_edit.text()
 
         try:
-            self._timer.start(subject_id=subj_id, task_id=task_id, notes=notes)
+            if self._mode_combo.currentData() == "pomodoro":
+                preset_id = self._preset_combo.currentData()
+                if preset_id is None:
+                    warn(self, "No Pomodoro preset", "Create or select a Pomodoro preset first.")
+                    return
+                self._pomodoro.start(
+                    preset_id, subject_id=subj_id, task_id=task_id, notes=notes
+                )
+                self._signals.pomodoro_phase_changed.emit("focus")
+            else:
+                self._timer.start(subject_id=subj_id, task_id=task_id, notes=notes)
             self._sync_with_timer_state()
             self._signals.timer_state_changed.emit()
         except AppError as exc:
@@ -289,9 +351,13 @@ class TimerPage(QWidget):
         if not self._timer.is_active:
             return
 
+        mode = self._timer.mode
         dur = self._timer.elapsed_seconds()
         # If under 60 seconds, ask to save or discard
-        if dur < 60:
+        if dur < 60 and not (
+            self._timer.mode == "pomodoro"
+            and self._timer.phase in {"short_break", "long_break"}
+        ):
             msg = f"This session is only {dur} seconds. Save it anyway?"
             if not confirm(self, "Short session", msg):
                 self._timer.discard()
@@ -299,8 +365,7 @@ class TimerPage(QWidget):
                 self._signals.timer_state_changed.emit()
                 return
 
-        offset = datetime.now().astimezone().utcoffset()
-        offset_mins = int(offset.total_seconds() // 60) if offset else 0
+        offset_mins = self._clock.local_utc_offset_minutes()
 
         try:
             self._timer.stop(utc_offset_mins=offset_mins)
@@ -309,8 +374,19 @@ class TimerPage(QWidget):
             self._signals.timer_state_changed.emit()
             self._signals.sessions_changed.emit()
             self._signals.tasks_changed.emit()
+            if mode == "pomodoro":
+                self._signals.pomodoro_phase_changed.emit("ended")
         except AppError as exc:
             warn(self, "Cannot stop timer", str(exc))
+
+    def _on_mode_changed(self) -> None:
+        self._preset_combo.setVisible(self._mode_combo.currentData() == "pomodoro")
+
+    def _skip_break(self) -> None:
+        self._timer.skip_break()
+        self._sync_with_timer_state()
+        self._signals.timer_state_changed.emit()
+        self._signals.pomodoro_phase_changed.emit("focus")
 
     def _on_discard(self) -> None:
         if not self._timer.is_active:
@@ -325,15 +401,22 @@ class TimerPage(QWidget):
 
     def _refresh_today_sessions(self) -> None:
         today = self._clock.local_date()
-        sessions = session_service.get_all(self._conn, date_from=today, date_to=today)
-        self._today_table.setRowCount(len(sessions))
+        cutoff_minutes = int(settings_repo.get(self._conn, "day_cutoff_minutes") or "180")
+        previous = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+        sessions = session_service.get_all(self._conn, date_from=previous, date_to=today)
+        allocated = [
+            (session, allocate_by_day(session, cutoff_minutes).get(today, 0))
+            for session in sessions
+        ]
+        allocated = [item for item in allocated if item[1] > 0]
+        self._today_table.setRowCount(len(allocated))
 
         subj_map = {s.id: s for s in subject_service.get_all(self._conn, include_archived=True)}
         task_map = {t.id: t for t in task_service.get_all(self._conn, include_archived=True)}
 
         total_secs = 0
-        for row, s in enumerate(sessions):
-            total_secs += s.duration_secs
+        for row, (s, allocated_secs) in enumerate(allocated):
+            total_secs += allocated_secs
 
             time_str = (
                 f"{format_time(s.start_utc)} – {format_time(s.end_utc)}"
@@ -341,7 +424,7 @@ class TimerPage(QWidget):
                 else "Duration only"
             )
             self._today_table.setItem(row, 0, QTableWidgetItem(time_str))
-            self._today_table.setItem(row, 1, QTableWidgetItem(format_duration(s.duration_secs)))
+            self._today_table.setItem(row, 1, QTableWidgetItem(format_duration(allocated_secs)))
 
             s_name = subj_map[s.subject_id].name if s.subject_id in subj_map else f"#{s.subject_id}"
             self._today_table.setItem(row, 2, QTableWidgetItem(s_name))

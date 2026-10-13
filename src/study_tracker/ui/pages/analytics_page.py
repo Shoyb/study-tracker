@@ -5,7 +5,16 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, timedelta
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from study_tracker.charts.subject_chart import draw_subject_distribution
 from study_tracker.charts.task_charts import (
@@ -14,7 +23,10 @@ from study_tracker.charts.task_charts import (
     draw_task_time,
 )
 from study_tracker.charts.weekly_trend import draw_week_overlay, draw_weekly_trend
-from study_tracker.db import settings_repo, subjects_repo, tasks_repo
+from study_tracker.core.formatting import format_duration
+from study_tracker.db import exams_repo, settings_repo, subjects_repo, tasks_repo
+from study_tracker.domain.exam_scoring import format_milli_marks, format_percentage
+from study_tracker.services.exam_stats_service import category_statistics
 from study_tracker.services.stats_service import (
     completions_by_week,
     task_time_for_range,
@@ -36,6 +48,7 @@ class AnalyticsPage(QWidget):
         self._build_ui()
         for signal in (signals.sessions_changed, signals.tasks_changed, signals.subjects_changed):
             signal.connect(self.refresh)
+        signals.exam_changed.connect(self.refresh)
         signals.settings_changed.connect(self.refresh)
         self.refresh()
 
@@ -79,6 +92,42 @@ class AnalyticsPage(QWidget):
         tasks_layout.addWidget(self._estimate_note)
         tasks_layout.addWidget(self._completions)
         tabs.addTab(tasks_tab, "Tasks")
+
+        exams_tab = QWidget()
+        exams_layout = QVBoxLayout(exams_tab)
+        exam_filters = QHBoxLayout()
+        self._exam_category = QComboBox()
+        self._exam_category.addItem("All Statistics", None)
+        for category in exams_repo.lookup_values(self._conn, "exam_categories"):
+            self._exam_category.addItem(str(category["name"]), int(category["id"]))
+        self._exam_level = QComboBox()
+        self._exam_level.addItem("All levels", None)
+        for level in exams_repo.lookup_values(self._conn, "exam_levels"):
+            self._exam_level.addItem(str(level["name"]), int(level["id"]))
+        self._exam_category.currentIndexChanged.connect(self._refresh_exam_statistics)
+        self._exam_level.currentIndexChanged.connect(self._refresh_exam_statistics)
+        exam_filters.addWidget(QLabel("Category:"))
+        exam_filters.addWidget(self._exam_category)
+        exam_filters.addWidget(QLabel("Level:"))
+        exam_filters.addWidget(self._exam_level)
+        exam_filters.addStretch()
+        exams_layout.addLayout(exam_filters)
+        self._exam_statistics = QTableWidget(0, 8)
+        self._exam_statistics.setHorizontalHeaderLabels(
+            [
+                "Category",
+                "Level",
+                "Exams",
+                "Score",
+                "Net accuracy",
+                "Attempt accuracy",
+                "Raw accuracy",
+                "Time taken",
+            ]
+        )
+        self._exam_statistics.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        exams_layout.addWidget(self._exam_statistics)
+        tabs.addTab(exams_tab, "Exams")
         root.addWidget(tabs)
 
     def _dates(self) -> tuple[str, str]:
@@ -105,7 +154,10 @@ class AnalyticsPage(QWidget):
             date_from=(date.fromisoformat(start) - timedelta(days=1)).isoformat(),
             date_to=end,
         )
-        for subject_id, seconds in subject_totals(sessions, start, end).items():
+        cutoff_minutes = int(settings_repo.get(self._conn, "day_cutoff_minutes") or "180")
+        for subject_id, seconds in subject_totals(
+            sessions, start, end, cutoff_minutes
+        ).items():
             subject = subject_map.get(subject_id)
             if subject:
                 subject_values.append((subject.name, seconds, subject.colour))
@@ -130,3 +182,34 @@ class AnalyticsPage(QWidget):
         week_start = settings_repo.get(self._conn, "week_start") or "monday"
         completions = completions_by_week(self._conn, start=start, end=end, week_start=week_start)
         self._completions.redraw(draw_completions, completions)
+        self._refresh_exam_statistics()
+
+    def _refresh_exam_statistics(self) -> None:
+        if not hasattr(self, "_exam_statistics"):
+            return
+        rows = category_statistics(
+            self._conn,
+            category_id=self._exam_category.currentData(),
+            level_id=self._exam_level.currentData(),
+        )
+        self._exam_statistics.setRowCount(len(rows))
+        for index, aggregate in enumerate(rows):
+            score_text = (
+                "—"
+                if aggregate.full_milli == 0
+                else f"{format_milli_marks(aggregate.score_milli)} / "
+                f"{format_milli_marks(aggregate.full_milli)}"
+            )
+            values = (
+                aggregate.category,
+                aggregate.level,
+                str(aggregate.exam_count),
+                score_text,
+                format_percentage(aggregate.net_accuracy) or "—",
+                format_percentage(aggregate.attempt_accuracy) or "—",
+                format_percentage(aggregate.raw_accuracy) or "—",
+                format_duration(aggregate.time_taken_seconds),
+            )
+            for column, value in enumerate(values):
+                self._exam_statistics.setItem(index, column, QTableWidgetItem(value))
+        self._exam_statistics.resizeColumnsToContents()

@@ -26,6 +26,8 @@ class Session:
     source: str | None = None
     source_id: str | None = None
     updated_at: str | None = None
+    pomodoro_run_id: int | None = None
+    pomodoro_completed: bool | None = None
 
 
 def _row_to_session(row: sqlite3.Row) -> Session:
@@ -44,6 +46,10 @@ def _row_to_session(row: sqlite3.Row) -> Session:
         source=row["source"],
         source_id=row["source_id"],
         created_at=row["created_at"],
+        pomodoro_run_id=row["pomodoro_run_id"],
+        pomodoro_completed=(
+            bool(row["pomodoro_completed"]) if row["pomodoro_completed"] is not None else None
+        ),
     )
 
 
@@ -160,16 +166,19 @@ def insert(
     source: str | None = None,
     source_id: str | None = None,
     created_at: str,
+    pomodoro_run_id: int | None = None,
+    pomodoro_completed: bool | None = None,
 ) -> int:
     cur = conn.execute(
         """INSERT INTO sessions
            (uuid, subject_id, task_id, local_date, start_utc, end_utc,
             duration_secs, session_type, notes, utc_offset_mins,
-            source, source_id, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source, source_id, created_at, pomodoro_run_id, pomodoro_completed)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (uuid, subject_id, task_id, local_date, start_utc, end_utc,
          duration_secs, session_type, notes, utc_offset_mins,
-         source, source_id, created_at),
+            source, source_id, created_at, pomodoro_run_id,
+            None if pomodoro_completed is None else int(pomodoro_completed)),
     )
     return cur.lastrowid  # type: ignore[return-value]
 
@@ -200,6 +209,13 @@ def update(
 
 def delete(conn: sqlite3.Connection, session_id: int) -> None:
     conn.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+
+
+def update_local_date(conn: sqlite3.Connection, session_id: int, local_date: str) -> None:
+    conn.execute(
+        "UPDATE sessions SET local_date = ? WHERE id = ?",
+        (local_date, session_id),
+    )
 
 
 def total_secs_for_date(conn: sqlite3.Connection, local_date: str) -> int:

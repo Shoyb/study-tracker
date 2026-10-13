@@ -27,6 +27,7 @@ class Task:
     time_spent_secs: int = 0
     session_count: int = 0
     uuid: str | None = None
+    scheduled_date: str | None = None
 
 
 def _row_to_task(row: sqlite3.Row) -> Task:
@@ -44,6 +45,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         completed_at=row["completed_at"],
         created_at=row["created_at"],
         time_spent_secs=row["time_spent_secs"] if "time_spent_secs" in row.keys() else 0,
+        scheduled_date=row["scheduled_date"] if "scheduled_date" in row.keys() else None,
     )
 
 
@@ -150,10 +152,11 @@ def update(
     estimate_secs: int | None,
     notes: str,
     completed_at: str | None,
+    scheduled_date: str | None = None,
 ) -> None:
     conn.execute(
         """UPDATE tasks SET subject_id=?, title=?, status=?, priority=?,
-           archived=?, due_date=?, estimate_secs=?, notes=?, completed_at=?
+           archived=?, due_date=?, estimate_secs=?, notes=?, completed_at=?, scheduled_date=?
            WHERE id=?""",
         (
             subject_id,
@@ -165,6 +168,7 @@ def update(
             estimate_secs,
             notes,
             completed_at,
+            scheduled_date,
             task_id,
         ),
     )

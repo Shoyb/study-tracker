@@ -6,10 +6,14 @@ import logging
 import sqlite3
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDateEdit,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -140,6 +144,12 @@ class TasksPage(QWidget):
         self._filter_due.addItem("No due date", "nodue")
         self._filter_due.currentIndexChanged.connect(self._apply_filters)
 
+        self._filter_scheduled = QComboBox()
+        self._filter_scheduled.addItem("Any schedule", None)
+        self._filter_scheduled.addItem("Scheduled", "scheduled")
+        self._filter_scheduled.addItem("Unscheduled", "unscheduled")
+        self._filter_scheduled.currentIndexChanged.connect(self._apply_filters)
+
         self._filter_archived = QCheckBox("Show archived")
         self._filter_archived.toggled.connect(self._apply_filters)
 
@@ -148,6 +158,7 @@ class TasksPage(QWidget):
         filter_bar.addWidget(self._filter_status, stretch=1)
         filter_bar.addWidget(self._filter_priority, stretch=1)
         filter_bar.addWidget(self._filter_due, stretch=1)
+        filter_bar.addWidget(self._filter_scheduled, stretch=1)
         filter_bar.addWidget(self._filter_archived)
         root.addLayout(filter_bar)
 
@@ -157,12 +168,12 @@ class TasksPage(QWidget):
             "background: #1F2A32; color: #E6EDF3; border: 1px solid #3A4F5F; "
             "selection-background-color: #175987; selection-color: #FFFFFF;"
         )
-        self._table.setColumnCount(7)
+        self._table.setColumnCount(8)
         self._table.setHorizontalHeaderLabels([
-            "Status", "Title", "Subject", "Priority", "Due Date", "Progress", "Actions"
+            "Status", "Title", "Subject", "Priority", "Due Date", "Scheduled", "Progress", "Actions"
         ])
         self._table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for c in (0, 2, 3, 4, 5, 6):
+        for c in (0, 2, 3, 4, 5, 6, 7):
             self._table.horizontalHeader().setSectionResizeMode(
                 c, QHeaderView.ResizeMode.ResizeToContents
             )
@@ -237,6 +248,7 @@ class TasksPage(QWidget):
         status_mode = self._filter_status.currentData()
         sel_prio = self._filter_priority.currentData()
         sel_due = self._filter_due.currentData()
+        scheduled_mode = self._filter_scheduled.currentData()
         show_archived = self._filter_archived.isChecked()
         today = self._clock.local_date()
 
@@ -272,6 +284,11 @@ class TasksPage(QWidget):
             elif sel_due == "nodue":
                 if t.due_date is not None:
                     continue
+
+            if scheduled_mode == "scheduled" and t.scheduled_date is None:
+                continue
+            if scheduled_mode == "unscheduled" and t.scheduled_date is not None:
+                continue
 
             if query:
                 if query not in t.title.lower() and query not in t.notes.lower():
@@ -333,7 +350,12 @@ class TasksPage(QWidget):
                 due_item.setForeground(Qt.GlobalColor.red)
             self._table.setItem(row, 4, due_item)
 
-            # 5. Progress / Estimate
+            scheduled_text = format_date(t.scheduled_date) if t.scheduled_date else "—"
+            scheduled_item = QTableWidgetItem(scheduled_text)
+            scheduled_item.setData(Qt.ItemDataRole.UserRole, t.scheduled_date or "9999-99-99")
+            self._table.setItem(row, 5, scheduled_item)
+
+            # 6. Progress / Estimate
             spent_str = format_duration(t.time_spent_secs)
             if t.estimate_secs:
                 est_str = format_duration(t.estimate_secs)
@@ -342,11 +364,11 @@ class TasksPage(QWidget):
                 prog_text = spent_str
             prog_item = QTableWidgetItem(prog_text)
             prog_item.setData(Qt.ItemDataRole.UserRole, t.time_spent_secs)
-            self._table.setItem(row, 5, prog_item)
+            self._table.setItem(row, 6, prog_item)
 
-            # 6. Action buttons
+            # 7. Action buttons
             actions_widget = _TaskRowActions(t, self._conn, self._signals, self._clock, self)
-            self._table.setCellWidget(row, 6, actions_widget)
+            self._table.setCellWidget(row, 7, actions_widget)
 
         self._table.setSortingEnabled(True)
 
@@ -431,6 +453,11 @@ class _TaskRowActions(QWidget):
         edit_btn.clicked.connect(self._on_edit)
         layout.addWidget(edit_btn)
 
+        schedule_btn = QPushButton("Unplan" if task.scheduled_date else "Schedule")
+        schedule_btn.setProperty("flat", True)
+        schedule_btn.clicked.connect(self._on_schedule)
+        layout.addWidget(schedule_btn)
+
         if task.archived:
             unarc_btn = QPushButton("Unarchive")
             unarc_btn.setProperty("flat", True)
@@ -453,7 +480,7 @@ class _TaskRowActions(QWidget):
         self._signals.tasks_changed.emit()
 
     def _on_reopen(self) -> None:
-        task_service.reopen(self._conn, self._task.id)
+        task_service.reopen(self._conn, self._task.id, self._clock.now_utc())
         self._signals.tasks_changed.emit()
 
     def _on_edit(self) -> None:
@@ -476,24 +503,50 @@ class _TaskRowActions(QWidget):
                 estimate_secs=dlg.estimate_secs,
                 notes=dlg.notes,
                 completed_at=completed_at,
+                scheduled_date=self._task.scheduled_date,
+                now_utc=self._clock.now_utc(),
             )
             self._signals.tasks_changed.emit()
         except AppError as exc:
             warn(self, "Cannot update task", str(exc))
 
+    def _on_schedule(self) -> None:
+        now_utc = self._clock.now_utc()
+        if self._task.scheduled_date:
+            task_service.schedule(self._conn, self._task.id, None, now_utc)
+            self._signals.tasks_changed.emit()
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Schedule task")
+        form = QFormLayout(dialog)
+        date_edit = QDateEdit(QDate.fromString(self._clock.local_date(), "yyyy-MM-dd"))
+        date_edit.setCalendarPopup(True)
+        form.addRow("Study day:", date_edit)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        form.addRow(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        scheduled_date = date_edit.date().toString("yyyy-MM-dd")
+        task_service.schedule(self._conn, self._task.id, scheduled_date, now_utc)
+        self._signals.tasks_changed.emit()
+
     def _on_archive(self) -> None:
-        task_service.archive(self._conn, self._task.id)
+        task_service.archive(self._conn, self._task.id, self._clock.now_utc())
         self._signals.tasks_changed.emit()
 
     def _on_unarchive(self) -> None:
-        task_service.unarchive(self._conn, self._task.id)
+        task_service.unarchive(self._conn, self._task.id, self._clock.now_utc())
         self._signals.tasks_changed.emit()
 
     def _on_delete(self) -> None:
         if not confirm(self, "Delete task", f"Permanently delete \"{self._task.title}\"?"):
             return
         try:
-            task_service.delete(self._conn, self._task.id)
+            task_service.delete(self._conn, self._task.id, self._clock.now_utc())
             self._signals.tasks_changed.emit()
         except AppError as exc:
             warn(self, "Cannot delete task", str(exc))

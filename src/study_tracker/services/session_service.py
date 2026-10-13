@@ -5,16 +5,19 @@ from __future__ import annotations
 import logging
 import sqlite3
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 
 from study_tracker.core.errors import ConflictError, NotFoundError, ValidationError
-from study_tracker.db import sessions_repo, subjects_repo, tasks_repo
+from study_tracker.db import sessions_repo, settings_repo, subjects_repo, tasks_repo
 from study_tracker.db.sessions_repo import Session
+from study_tracker.domain.day import study_date_for_utc
 from study_tracker.domain.validation import (
     validate_duration_secs,
     validate_session_times,
     validate_session_type,
 )
+from study_tracker.services.undo.adapters import snapshot
+from study_tracker.services.undo.journal import JournalService
 
 log = logging.getLogger(__name__)
 
@@ -29,16 +32,19 @@ def _assert_task_exists(conn: sqlite3.Connection, task_id: int) -> None:
         raise NotFoundError(f"Task {task_id} not found.")
 
 
-def _derive_local_date(utc_iso: str, utc_offset_mins: int) -> str:
-    dt_utc = datetime.strptime(utc_iso, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=UTC)
-    local_dt = dt_utc + timedelta(minutes=utc_offset_mins)
-    return local_dt.strftime("%Y-%m-%d")
+def _derive_local_date(
+    utc_iso: str,
+    utc_offset_mins: int,
+    cutoff_minutes: int = 180,
+) -> str:
+    return study_date_for_utc(utc_iso, utc_offset_mins, cutoff_minutes=cutoff_minutes)
 
 
-def _maybe_start_task(conn: sqlite3.Connection, task_id: int | None) -> None:
+def _maybe_start_task(conn: sqlite3.Connection, task_id: int | None, record=None) -> None:
     """If the task is in 'todo' status, automatically move it to 'in_progress'."""
     if task_id is None:
         return
+    before = snapshot(conn, "task", task_id) if record else None
     task = tasks_repo.get_by_id(conn, task_id)
     if task and task.status == "todo":
         tasks_repo.update(
@@ -53,8 +59,11 @@ def _maybe_start_task(conn: sqlite3.Connection, task_id: int | None) -> None:
             estimate_secs=task.estimate_secs,
             notes=task.notes,
             completed_at=None,
+            scheduled_date=task.scheduled_date,
         )
         log.info("Task %d automatically transitioned from todo to in_progress.", task.id)
+        if record:
+            record("task", task_id, "update", before, snapshot(conn, "task", task_id))
 
 
 def add_manual_timed(
@@ -76,6 +85,7 @@ def add_manual_timed(
 
     validate_session_times(start_utc, end_utc, now_utc=created_at)
 
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
     start_dt = datetime.strptime(start_utc, "%Y-%m-%dT%H:%M:%SZ")
     end_dt = datetime.strptime(end_utc, "%Y-%m-%dT%H:%M:%SZ")
     span_secs = int((end_dt - start_dt).total_seconds())
@@ -84,6 +94,7 @@ def add_manual_timed(
         duration_secs = span_secs
 
     validate_duration_secs(duration_secs)
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
     if duration_secs > span_secs:
         raise ValidationError(
             f"Duration ({duration_secs}s) cannot exceed time span between start and "
@@ -99,25 +110,26 @@ def add_manual_timed(
             f"{conflict.start_utc} to {conflict.end_utc})."
         )
 
-    local_date = _derive_local_date(start_utc, utc_offset_mins)
+    local_date = _derive_local_date(start_utc, utc_offset_mins, cutoff_minutes=cutoff_minutes)
     sess_uuid = str(uuid.uuid4())
 
-    new_id = sessions_repo.insert(
-        conn,
-        uuid=sess_uuid,
-        subject_id=subject_id,
-        task_id=task_id,
-        local_date=local_date,
-        start_utc=start_utc,
-        end_utc=end_utc,
-        duration_secs=duration_secs,
-        session_type="manual_timed",
-        notes=notes.strip(),
-        utc_offset_mins=utc_offset_mins,
-        created_at=created_at,
-    )
-
-    _maybe_start_task(conn, task_id)
+    with JournalService(conn).action("Add timed session", created_at) as record:
+        new_id = sessions_repo.insert(
+            conn,
+            uuid=sess_uuid,
+            subject_id=subject_id,
+            task_id=task_id,
+            local_date=local_date,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            duration_secs=duration_secs,
+            session_type="manual_timed",
+            notes=notes.strip(),
+            utc_offset_mins=utc_offset_mins,
+            created_at=created_at,
+        )
+        record("session", new_id, "create", None, snapshot(conn, "session", new_id))
+        _maybe_start_task(conn, task_id, record)
     log.info("Manual timed session created: id=%d", new_id)
     sess = sessions_repo.get_by_id(conn, new_id)
     assert sess is not None
@@ -151,22 +163,23 @@ def add_manual_duration(
         )
 
     sess_uuid = str(uuid.uuid4())
-    new_id = sessions_repo.insert(
-        conn,
-        uuid=sess_uuid,
-        subject_id=subject_id,
-        task_id=task_id,
-        local_date=local_date,
-        start_utc=None,
-        end_utc=None,
-        duration_secs=duration_secs,
-        session_type="manual_duration",
-        notes=notes.strip(),
-        utc_offset_mins=utc_offset_mins,
-        created_at=created_at,
-    )
-
-    _maybe_start_task(conn, task_id)
+    with JournalService(conn).action("Add duration session", created_at) as record:
+        new_id = sessions_repo.insert(
+            conn,
+            uuid=sess_uuid,
+            subject_id=subject_id,
+            task_id=task_id,
+            local_date=local_date,
+            start_utc=None,
+            end_utc=None,
+            duration_secs=duration_secs,
+            session_type="manual_duration",
+            notes=notes.strip(),
+            utc_offset_mins=utc_offset_mins,
+            created_at=created_at,
+        )
+        record("session", new_id, "create", None, snapshot(conn, "session", new_id))
+        _maybe_start_task(conn, task_id, record)
     log.info("Manual duration session created: id=%d", new_id)
     sess = sessions_repo.get_by_id(conn, new_id)
     assert sess is not None
@@ -199,6 +212,7 @@ def update(
 
     validate_duration_secs(duration_secs)
     validate_session_type(session_type)
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
 
     if start_utc and end_utc:
         validate_session_times(start_utc, end_utc, now_utc=now_utc)
@@ -220,33 +234,77 @@ def update(
                 f"Session overlaps with session {conflict.id} "
                 f"({conflict.start_utc} to {conflict.end_utc})."
             )
-        local_date = _derive_local_date(start_utc, utc_offset_mins)
+        local_date = _derive_local_date(start_utc, utc_offset_mins, cutoff_minutes=cutoff_minutes)
 
-    sessions_repo.update(
-        conn,
-        session_id,
-        subject_id=subject_id,
-        task_id=task_id,
-        local_date=local_date,
-        start_utc=start_utc,
-        end_utc=end_utc,
-        duration_secs=duration_secs,
-        session_type=session_type,
-        notes=notes.strip(),
-        utc_offset_mins=utc_offset_mins,
-    )
+    journal_at = now_utc or existing.created_at
+    before = snapshot(conn, "session", session_id)
+    with JournalService(conn).action("Edit session", journal_at) as record:
+        sessions_repo.update(
+            conn,
+            session_id,
+            subject_id=subject_id,
+            task_id=task_id,
+            local_date=local_date,
+            start_utc=start_utc,
+            end_utc=end_utc,
+            duration_secs=duration_secs,
+            session_type=session_type,
+            notes=notes.strip(),
+            utc_offset_mins=utc_offset_mins,
+        )
+        record("session", session_id, "update", before, snapshot(conn, "session", session_id))
     log.info("Session %d updated.", session_id)
     sess = sessions_repo.get_by_id(conn, session_id)
     assert sess is not None
     return sess
 
 
-def delete(conn: sqlite3.Connection, session_id: int) -> None:
-    existing = sessions_repo.get_by_id(conn, session_id)
-    if existing is None:
-        raise NotFoundError(f"Session {session_id} not found.")
-    sessions_repo.delete(conn, session_id)
-    log.info("Session %d deleted.", session_id)
+def delete(conn: sqlite3.Connection, session_id: int, now_utc: str | None = None) -> None:
+    delete_many(conn, [session_id], now_utc=now_utc)
+
+
+def delete_many(
+    conn: sqlite3.Connection, session_ids: list[int], *, now_utc: str | None = None
+) -> int:
+    """Delete selected sessions as one undoable action."""
+    sessions = [sessions_repo.get_by_id(conn, session_id) for session_id in session_ids]
+    if any(session is None for session in sessions):
+        missing = next(
+            session_id
+            for session_id, session in zip(session_ids, sessions, strict=True)
+            if session is None
+        )
+        raise NotFoundError(f"Session {missing} not found.")
+    existing = [session for session in sessions if session is not None]
+    if not existing:
+        return 0
+    summary = f"Delete {len(existing)} session{'s' if len(existing) != 1 else ''}"
+    timestamp = now_utc or existing[0].created_at
+    with JournalService(conn).action(summary, timestamp) as record:
+        linked_exams: dict[int, dict] = {}
+        for session in existing:
+            rows = conn.execute(
+                "SELECT id FROM exams WHERE session_id = ?", (session.id,)
+            ).fetchall()
+            for row in rows:
+                linked_exams.setdefault(
+                    row["id"], snapshot(conn, "exam", row["id"])
+                )
+            before = snapshot(conn, "session", session.id)
+            sessions_repo.delete(conn, session.id)
+            for exam_id, exam_before in linked_exams.items():
+                record(
+                    "exam",
+                    exam_id,
+                    "update",
+                    exam_before,
+                    snapshot(conn, "exam", exam_id),
+                )
+            record("session", session.id, "delete", before, None)
+            linked_exams.clear()
+    for session in existing:
+        log.info("Session %d deleted.", session.id)
+    return len(existing)
 
 
 def get_all(

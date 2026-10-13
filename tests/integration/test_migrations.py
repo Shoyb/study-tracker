@@ -26,13 +26,13 @@ class TestMigrations:
     def test_fresh_database_has_current_version(self, conn, db_path):
         run_migrations(conn, db_path)
         version = conn.execute("PRAGMA user_version;").fetchone()[0]
-        assert version == 2
+        assert version == 8
 
     def test_second_start_does_not_change_version(self, conn, db_path):
         run_migrations(conn, db_path)
         run_migrations(conn, db_path)  # should be a no-op
         version = conn.execute("PRAGMA user_version;").fetchone()[0]
-        assert version == 2
+        assert version == 8
 
     def test_all_tables_exist(self, conn, db_path):
         run_migrations(conn, db_path)
@@ -59,6 +59,26 @@ class TestMigrations:
         ).fetchone()
         assert row is not None
         assert row[0] == "saturday"
+        cutoff = conn.execute(
+            "SELECT value FROM settings WHERE key='day_cutoff_minutes'"
+        ).fetchone()
+        assert cutoff[0] == "180"
+        calendar_table = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='calendar_items'"
+        ).fetchone()
+        assert calendar_table is not None
+        task_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(tasks)").fetchall()
+        }
+        assert "scheduled_date" in task_columns
+        pomodoro_presets = conn.execute(
+            "SELECT COUNT(*) FROM pomodoro_presets"
+        ).fetchone()[0]
+        assert pomodoro_presets == 2
+        exam_levels = conn.execute("SELECT COUNT(*) FROM exam_levels").fetchone()[0]
+        exam_categories = conn.execute("SELECT COUNT(*) FROM exam_categories").fetchone()[0]
+        assert exam_levels == 2
+        assert exam_categories == 6
 
     def test_newer_version_raises(self, conn, db_path):
         run_migrations(conn, db_path)

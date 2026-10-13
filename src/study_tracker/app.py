@@ -104,6 +104,15 @@ def _open_database() -> sqlite3.Connection:
     conn = get_connection(db_path)
     run_migrations(conn, db_path)
 
+    from study_tracker.db import settings_repo
+    from study_tracker.services.undo.journal import JournalService
+
+    JournalService(conn).purge(
+        Clock().now_utc(),
+        keep_entries=int(settings_repo.get(conn, "undo_keep_entries") or "500"),
+        keep_days=int(settings_repo.get(conn, "undo_keep_days") or "30"),
+    )
+
     if not quick_check(conn):
         raise DatabaseError(
             f"Database integrity check failed: {db_path}\n"
@@ -120,7 +129,6 @@ def _auto_backup(conn: sqlite3.Connection) -> None:
     settings_val = None
     try:
         from study_tracker.db import settings_repo
-
         settings_val = settings_repo.get(conn, "auto_backup")
     except Exception:
         pass
@@ -186,7 +194,9 @@ class Application(QApplication):
         _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "light")
         self._signals = AppSignals(self)
         self._signals.settings_changed.connect(self._apply_saved_theme)
-        self._clock = Clock()
+        self._clock = Clock(
+            cutoff_minutes=int(settings_repo.get(self._conn, "day_cutoff_minutes") or "180")
+        )
         self._apply_saved_theme()
 
         # 5. Main window.
@@ -209,6 +219,8 @@ class Application(QApplication):
 
     def _restore_database(self, backup_path) -> None:
         """Safety-back up, replace, reopen, and rebuild pages using the new database."""
+        from study_tracker.db import settings_repo
+
         create_backup(self._conn, paths.backup_dir())
         self._conn.close()
         try:
@@ -220,7 +232,9 @@ class Application(QApplication):
         self._window.close()
         self._signals = AppSignals(self)
         self._signals.settings_changed.connect(self._apply_saved_theme)
-        self._clock = Clock()
+        self._clock = Clock(
+            cutoff_minutes=int(settings_repo.get(self._conn, "day_cutoff_minutes") or "180")
+        )
         self._apply_saved_theme()
         self._window = MainWindow(
             self._signals,

@@ -180,6 +180,7 @@ def commit_tasks(
                     estimate_secs=task.estimate_secs,
                     notes=task.notes,
                     completed_at=task.completed_at,
+                    scheduled_date=task.scheduled_date,
                 )
         imports_repo.add(
             conn,

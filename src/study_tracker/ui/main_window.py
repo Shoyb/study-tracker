@@ -10,15 +10,21 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QStatusBar,
     QSystemTrayIcon,
+    QTextEdit,
+    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -27,11 +33,13 @@ from study_tracker.core import paths
 from study_tracker.core.clock import Clock
 from study_tracker.core.errors import DatabaseError
 from study_tracker.core.formatting import format_duration, format_duration_short
-from study_tracker.db import subjects_repo, tasks_repo
+from study_tracker.db import settings_repo, subjects_repo, tasks_repo
 from study_tracker.services.timer_service import TimerService
+from study_tracker.services.undo.journal import JournalService
 from study_tracker.ui.pages.analytics_page import AnalyticsPage
 from study_tracker.ui.pages.calendar_page import CalendarPage
 from study_tracker.ui.pages.dashboard_page import DashboardPage
+from study_tracker.ui.pages.exams_page import ExamsPage
 from study_tracker.ui.pages.history_page import HistoryPage
 from study_tracker.ui.pages.settings_page import SettingsPage
 from study_tracker.ui.pages.subjects_page import SubjectsPage
@@ -138,7 +146,13 @@ class TimerBar(QWidget):
         if not self._timer_svc or not self._timer_svc.is_active or not self._conn:
             return
 
-        secs = self._timer_svc.elapsed_seconds()
+        phase_prefix = ""
+        if self._timer_svc.mode == "pomodoro":
+            secs = self._timer_svc.remaining_seconds
+            phase = (self._timer_svc.phase or "focus").replace("_", " ").title()
+            phase_prefix = f"Pomodoro {phase} — "
+        else:
+            secs = self._timer_svc.elapsed_seconds()
         self._elapsed_label.setText(format_duration_short(secs))
 
         subj = subjects_repo.get_by_id(self._conn, self._timer_svc.subject_id)
@@ -150,7 +164,7 @@ class TimerBar(QWidget):
             task_title = ""
 
         status_prefix = "[PAUSED] " if self._timer_svc.is_paused else ""
-        self._info_label.setText(f"{status_prefix}{subj_name}{task_title}")
+        self._info_label.setText(f"{status_prefix}{phase_prefix}{subj_name}{task_title}")
         self._pause_btn.setText("▶  Resume" if self._timer_svc.is_paused else "⏸  Pause")
 
 
@@ -179,6 +193,7 @@ class MainWindow(QMainWindow):
         "Dashboard",
         "Timer",
         "Tasks",
+        "Exams",
         "History",
         "Calendar",
         "Analytics",
@@ -200,6 +215,7 @@ class MainWindow(QMainWindow):
         self._signals = signals
         self._conn = conn
         self._clock = clock or Clock()
+        self._last_study_day = self._clock.local_date()
         self._on_restore = on_restore
         self._database_path = database_path
         self._log_path = log_path
@@ -216,6 +232,13 @@ class MainWindow(QMainWindow):
         self._setup_timers()
 
         self._signals.timer_state_changed.connect(self._update_timer_bar)
+        self._signals.pomodoro_phase_changed.connect(self._notify_pomodoro_phase)
+        self._signals.sessions_changed.connect(self._update_undo_actions)
+        self._signals.tasks_changed.connect(self._update_undo_actions)
+        self._signals.subjects_changed.connect(self._update_undo_actions)
+        self._signals.calendar_changed.connect(self._update_undo_actions)
+        self._signals.exam_changed.connect(self._update_undo_actions)
+        self._update_undo_actions()
 
         QTimer.singleShot(0, self._check_startup_recovery)
         log.info("Main window initialised.")
@@ -251,6 +274,14 @@ class MainWindow(QMainWindow):
             on_stop=self._on_timer_bar_stop,
             parent=right_col,
         )
+        self._edit_toolbar = QToolBar("Edit history", right_col)
+        self._undo_action = self._edit_toolbar.addAction("Undo")
+        self._redo_action = self._edit_toolbar.addAction("Redo")
+        self._history_action = self._edit_toolbar.addAction("Undo History")
+        self._undo_action.triggered.connect(self._undo)
+        self._redo_action.triggered.connect(self._redo)
+        self._history_action.triggered.connect(self._show_undo_history)
+        right_layout.addWidget(self._edit_toolbar)
         right_layout.addWidget(self._timer_bar)
 
         self._stack = QStackedWidget(right_col)
@@ -274,6 +305,9 @@ class MainWindow(QMainWindow):
             elif name == "Tasks" and self._conn is not None:
                 self._tasks_page = TasksPage(self._conn, self._signals, self._clock)
                 self._stack.addWidget(self._tasks_page)
+            elif name == "Exams" and self._conn is not None:
+                self._exams_page = ExamsPage(self._conn, self._signals, self._clock)
+                self._stack.addWidget(self._exams_page)
             elif name == "History" and self._conn is not None:
                 self._history_page = HistoryPage(self._conn, self._signals, self._clock)
                 self._stack.addWidget(self._history_page)
@@ -309,6 +343,98 @@ class MainWindow(QMainWindow):
         for i in range(len(self._PAGE_NAMES)):
             sc = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
             sc.activated.connect(lambda idx=i: self._navigate(idx))
+        self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
+        self._undo_shortcut.activated.connect(self._undo_if_not_editing)
+        self._redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
+        self._redo_shortcut.activated.connect(self._redo_if_not_editing)
+
+    def _update_undo_actions(self) -> None:
+        if self._conn is None:
+            return
+        entries = JournalService(self._conn).history(limit=500)
+        undo_entry = next((entry for entry in entries if entry.undone_at_utc is None), None)
+        redo_entry = next((entry for entry in entries if entry.undone_at_utc is not None), None)
+        self._undo_action.setEnabled(undo_entry is not None)
+        self._redo_action.setEnabled(redo_entry is not None)
+        self._undo_action.setToolTip(
+            f"Undo: {undo_entry.summary}" if undo_entry else "Undo unavailable"
+        )
+        self._redo_action.setToolTip(
+            f"Redo: {redo_entry.summary}" if redo_entry else "Redo unavailable"
+        )
+
+    def _undo_if_not_editing(self) -> None:
+        if not isinstance(
+            self.focusWidget(),
+            (QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit),
+        ):
+            self._undo()
+
+    def _redo_if_not_editing(self) -> None:
+        if not isinstance(
+            self.focusWidget(),
+            (QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit),
+        ):
+            self._redo()
+
+    def _after_journal_change(self) -> None:
+        self._signals.sessions_changed.emit()
+        self._signals.tasks_changed.emit()
+        self._signals.subjects_changed.emit()
+        self._signals.calendar_changed.emit()
+        self._signals.exam_changed.emit()
+        self._signals.timer_state_changed.emit()
+        self._update_undo_actions()
+
+    def _undo(self) -> None:
+        if self._conn is None:
+            return
+        try:
+            summary = JournalService(self._conn).undo(self._clock.now_utc())
+        except Exception as exc:
+            warn(self, "Cannot undo", str(exc))
+            return
+        if summary:
+            self._after_journal_change()
+            self.show_status(f"Undid: {summary}", timeout_ms=10000)
+
+    def _redo(self) -> None:
+        if self._conn is None:
+            return
+        try:
+            summary = JournalService(self._conn).redo(self._clock.now_utc())
+        except Exception as exc:
+            warn(self, "Cannot redo", str(exc))
+            return
+        if summary:
+            self._after_journal_change()
+            self.show_status(f"Redid: {summary}", timeout_ms=10000)
+
+    def _show_undo_history(self) -> None:
+        if self._conn is None:
+            return
+        from study_tracker.ui.dialogs.undo_history import UndoHistoryDialog
+
+        dialog = UndoHistoryDialog(
+            self._conn, self._clock, self._after_journal_change, self
+        )
+        dialog.exec()
+
+    def _notify_pomodoro_phase(self, phase: str) -> None:
+        label = phase.replace("_", " ").title()
+        message = "Pomodoro run ended" if phase == "ended" else f"Pomodoro {label} started"
+        self.show_status(message, timeout_ms=10000)
+        if self._tray_icon is not None:
+            self._tray_icon.showMessage(
+                "Study Tracker", message, QSystemTrayIcon.MessageIcon.Information, 10000
+            )
+        if settings_repo.get(self._conn, "pomodoro_sound") == "1":
+            try:
+                import winsound
+
+                winsound.MessageBeep()
+            except (ImportError, RuntimeError):
+                pass
 
     def _setup_timers(self) -> None:
         self._tick_timer = QTimer(self)
@@ -366,6 +492,10 @@ class MainWindow(QMainWindow):
 
     def _on_tick(self) -> None:
         self._signals.timer_tick.emit()
+        current_study_day = self._clock.local_date()
+        if current_study_day != self._last_study_day:
+            self._last_study_day = current_study_day
+            self._signals.day_changed.emit()
         if self._timer_svc and self._timer_svc.is_running:
             gap = self._timer_svc.check_inactivity_gap()
             if gap is not None:
@@ -402,8 +532,6 @@ class MainWindow(QMainWindow):
         if state is None:
             return
 
-        from datetime import datetime
-
         from study_tracker.ui.dialogs.recovery_dialog import RecoveryDialog
 
         dlg = RecoveryDialog(self._conn, state, self)
@@ -411,17 +539,36 @@ class MainWindow(QMainWindow):
             return
 
         if dlg.action == RecoveryDialog.SAVE:
-            offset = datetime.now().astimezone().utcoffset()
-            offset_mins = int(offset.total_seconds() // 60) if offset else 0
+            offset_mins = self._clock.local_utc_offset_minutes()
             sess = self._timer_svc.recover_and_save(state, utc_offset_mins=offset_mins)
             self._signals.sessions_changed.emit()
             self._signals.tasks_changed.emit()
-            self.show_status(f"Recovered session saved ({format_duration(sess.duration_secs)}).")
+            if sess is not None:
+                self.show_status(
+                    f"Recovered session saved ({format_duration(sess.duration_secs)})."
+                )
+            else:
+                self.show_status("Recovered Pomodoro break ended without adding study time.")
         elif dlg.action == RecoveryDialog.RESUME:
             self._timer_svc.recover_as_paused(state)
             self._signals.timer_state_changed.emit()
             self._navigate(1)
             self.show_status("Recovered session loaded (paused).")
+        elif dlg.action == RecoveryDialog.RESUME_BREAK:
+            self._timer_svc.recover_as_paused(state)
+            self._timer_svc.resume()
+            self._signals.timer_state_changed.emit()
+            self._navigate(1)
+            self.show_status("Pomodoro break resumed.")
+        elif dlg.action == RecoveryDialog.START_NEXT_FOCUS:
+            self._timer_svc.recover_as_paused(state)
+            self._timer_svc.skip_break()
+            self._signals.timer_state_changed.emit()
+            self._navigate(1)
+            self.show_status("Pomodoro focus started.")
+        elif dlg.action == RecoveryDialog.END_POMODORO:
+            self._timer_svc.discard()
+            self.show_status("Pomodoro run ended.")
         elif dlg.action == RecoveryDialog.DISCARD:
             self._timer_svc.discard()
             self.show_status("Interrupted session discarded.")
@@ -442,10 +589,7 @@ class MainWindow(QMainWindow):
             clicked = msg_box.clickedButton()
 
             if clicked == stop_btn:
-                from datetime import datetime
-
-                offset = datetime.now().astimezone().utcoffset()
-                offset_mins = int(offset.total_seconds() // 60) if offset else 0
+                offset_mins = self._clock.local_utc_offset_minutes()
                 try:
                     self._timer_svc.stop(utc_offset_mins=offset_mins)
                     event.accept()
@@ -479,7 +623,7 @@ class MainWindow(QMainWindow):
         """Navigate from a chart to the History view filtered to one day."""
         if hasattr(self, "_history_page"):
             self._history_page.show_date(local_date)
-        self._navigate(3)
+        self._navigate(4)
 
     def _restore_from_settings(self, backup_path: Path) -> None:
         """Guard a destructive database replacement behind an idle timer."""
@@ -502,15 +646,12 @@ class MainWindow(QMainWindow):
         if self._conn is None:
             return
 
-        from datetime import datetime
-
         from study_tracker.core.errors import AppError
         from study_tracker.db import subjects_repo
         from study_tracker.services import session_service
         from study_tracker.ui.dialogs.session_dialog import SessionDialog
 
-        offset = datetime.now().astimezone().utcoffset()
-        offset_mins = int(offset.total_seconds() // 60) if offset else 0
+        offset_mins = self._clock.local_utc_offset_minutes()
 
         dlg = SessionDialog(
             self._conn,

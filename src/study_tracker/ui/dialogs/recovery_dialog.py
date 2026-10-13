@@ -24,6 +24,9 @@ class RecoveryDialog(QDialog):
     SAVE = 1
     RESUME = 2
     DISCARD = 3
+    RESUME_BREAK = 4
+    START_NEXT_FOCUS = 5
+    END_POMODORO = 6
 
     def __init__(
         self,
@@ -53,10 +56,21 @@ class RecoveryDialog(QDialog):
         h_dt = datetime.strptime(self._state.last_heartbeat, "%Y-%m-%dT%H:%M:%SZ")
         dur = max(1, self._state.paused_secs + int((h_dt - s_dt).total_seconds()))
 
-        title_lbl = QLabel("<h3>Unsaved Study Session Found</h3>")
+        is_pomodoro_break = self._state.mode == "pomodoro" and self._state.phase != "focus"
+        title_lbl = QLabel(
+            "<h3>Pomodoro break interrupted</h3>"
+            if is_pomodoro_break
+            else "<h3>Unsaved Study Session Found</h3>"
+        )
         layout.addWidget(title_lbl)
 
-        info_text = (
+        if is_pomodoro_break:
+            info_text = (
+                f"<p>The {self._state.phase.replace('_', ' ')} was interrupted.</p>"
+                "<p>Break time is never added to study totals.</p>"
+            )
+        else:
+            info_text = (
             f"<p>An interrupted timer session was recovered:</p>"
             f"<ul>"
             f"<li><b>Subject:</b> {subj_name}</li>"
@@ -65,7 +79,7 @@ class RecoveryDialog(QDialog):
             f"<li><b>Duration:</b> {format_duration(dur)}</li>"
             f"</ul>"
             f"<p><i>Time after the last recorded activity is not counted.</i></p>"
-        )
+            )
         info_lbl = QLabel(info_text)
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)
@@ -73,21 +87,28 @@ class RecoveryDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        save_btn = QPushButton("Save Session")
-        save_btn.clicked.connect(self._on_save)
-
-        resume_btn = QPushButton("Resume (Paused)")
-        resume_btn.setProperty("flat", True)
-        resume_btn.clicked.connect(self._on_resume)
-
-        discard_btn = QPushButton("Discard")
-        discard_btn.setProperty("flat", True)
-        discard_btn.setStyleSheet("color: #D32F2F;")
-        discard_btn.clicked.connect(self._on_discard)
-
-        btn_row.addWidget(save_btn)
-        btn_row.addWidget(resume_btn)
-        btn_row.addWidget(discard_btn)
+        if is_pomodoro_break:
+            for label, action in (
+                ("Resume break", self.RESUME_BREAK),
+                ("Start next focus", self.START_NEXT_FOCUS),
+                ("End run", self.END_POMODORO),
+            ):
+                button = QPushButton(label)
+                button.clicked.connect(lambda checked=False, value=action: self._choose(value))
+                btn_row.addWidget(button)
+        else:
+            save_btn = QPushButton("Save Session")
+            save_btn.clicked.connect(self._on_save)
+            resume_btn = QPushButton("Resume (Paused)")
+            resume_btn.setProperty("flat", True)
+            resume_btn.clicked.connect(self._on_resume)
+            discard_btn = QPushButton("Discard")
+            discard_btn.setProperty("flat", True)
+            discard_btn.setStyleSheet("color: #D32F2F;")
+            discard_btn.clicked.connect(self._on_discard)
+            btn_row.addWidget(save_btn)
+            btn_row.addWidget(resume_btn)
+            btn_row.addWidget(discard_btn)
         layout.addLayout(btn_row)
 
     def _on_save(self) -> None:
@@ -100,6 +121,10 @@ class RecoveryDialog(QDialog):
 
     def _on_discard(self) -> None:
         self._action = self.DISCARD
+        self.accept()
+
+    def _choose(self, action: int) -> None:
+        self._action = action
         self.accept()
 
     @property

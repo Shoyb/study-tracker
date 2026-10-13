@@ -24,6 +24,12 @@ class AppSignals(QObject):
     # A subject was added, renamed, recoloured, reordered, archived or deleted.
     subjects_changed = Signal()
 
+    # Calendar items or scheduled dates changed.
+    calendar_changed = Signal()
+
+    # Exam results, plans, or lookup lists changed.
+    exam_changed = Signal()
+
     # Settings were changed (week start, theme, streak threshold, etc.).
     settings_changed = Signal()
 
@@ -35,3 +41,6 @@ class AppSignals(QObject):
 
     # Emitted when timer starts, pauses, resumes, stops, or is recovered/discarded.
     timer_state_changed = Signal()
+
+    # Pomodoro phase changes for in-app and tray notifications.
+    pomodoro_phase_changed = Signal(str)

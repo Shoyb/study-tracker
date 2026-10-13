@@ -19,6 +19,7 @@ class Sidebar(QListWidget):
         ("📊", "Dashboard"),
         ("⏱", "Timer"),
         ("✅", "Tasks"),
+        ("🧾", "Exams"),
         ("📋", "History"),
         ("📅", "Calendar"),
         ("📈", "Analytics"),

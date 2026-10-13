@@ -61,7 +61,7 @@ class TestAllocateByDay:
             duration_secs=3600,
             utc_offset_mins=0,
         )
-        res = allocate_by_day(s)
+        res = allocate_by_day(s, cutoff_minutes=0)
         assert res == {"2026-10-13": 1800, "2026-10-14": 1800}
 
     def test_midnight_crossing_with_offset(self):
@@ -75,8 +75,44 @@ class TestAllocateByDay:
             duration_secs=3600,
             utc_offset_mins=360,
         )
-        res = allocate_by_day(s)
+        res = allocate_by_day(s, cutoff_minutes=0)
         assert res == {"2026-10-13": 1800, "2026-10-14": 1800}
+
+    def test_default_study_day_boundary_at_03_00(self):
+        s = make_session(
+            start_utc="2026-10-13T02:30:00Z",
+            end_utc="2026-10-13T03:30:00Z",
+            duration_secs=3600,
+        )
+        assert allocate_by_day(s) == {"2026-10-12": 1800, "2026-10-13": 1800}
+
+    def test_early_morning_and_exact_cutoff_belong_to_expected_days(self):
+        early = make_session(
+            start_utc="2026-10-13T00:30:00Z",
+            end_utc="2026-10-13T01:30:00Z",
+            duration_secs=3600,
+        )
+        boundary = make_session(
+            start_utc="2026-10-13T02:59:00Z",
+            end_utc="2026-10-13T03:01:00Z",
+            duration_secs=120,
+        )
+        assert allocate_by_day(early) == {"2026-10-12": 3600}
+        assert allocate_by_day(boundary) == {"2026-10-12": 60, "2026-10-13": 60}
+
+    def test_study_day_cutoff_at_03_00(self):
+        # 23:30 on day N to 03:30 on the next day belongs to two study days:
+        # the first day contributes 03:00 to 03:30, the second contributes 00:00 to 03:00?
+        # In this custom cutoff model, the session is split at 03:00 local time.
+        s = make_session(
+            local_date="2026-10-13",
+            start_utc="2026-10-13T23:30:00Z",
+            end_utc="2026-10-14T03:30:00Z",
+            duration_secs=14_400,
+            utc_offset_mins=0,
+        )
+        res = allocate_by_day(s, cutoff_minutes=180)
+        assert res == {"2026-10-13": 12_600, "2026-10-14": 1_800}
 
     def test_span_over_three_days(self):
         # 2026-10-13 22:00:00 to 2026-10-15 02:00:00
@@ -88,7 +124,7 @@ class TestAllocateByDay:
             duration_secs=28 * 3600,
             utc_offset_mins=0,
         )
-        res = allocate_by_day(s)
+        res = allocate_by_day(s, cutoff_minutes=0)
         assert sum(res.values()) == 28 * 3600
         assert res["2026-10-13"] == 2 * 3600
         assert res["2026-10-14"] == 24 * 3600

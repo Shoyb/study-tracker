@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
 
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
@@ -325,8 +324,7 @@ class HistoryPage(QWidget):
         if dlg.exec() != SessionDialog.DialogCode.Accepted:
             return
 
-        offset = datetime.now().astimezone().utcoffset()
-        offset_mins = int(offset.total_seconds() // 60) if offset else 0
+        offset_mins = self._clock.local_utc_offset_minutes()
         now_utc = self._clock.now_utc()
 
         try:
@@ -370,8 +368,7 @@ class HistoryPage(QWidget):
         if dlg.exec() != SessionDialog.DialogCode.Accepted:
             return
 
-        offset = datetime.now().astimezone().utcoffset()
-        offset_mins = int(offset.total_seconds() // 60) if offset else 0
+        offset_mins = self._clock.local_utc_offset_minutes()
 
         try:
             if dlg.is_timed:
@@ -424,8 +421,11 @@ class HistoryPage(QWidget):
             return
 
         try:
-            for s in sel:
-                session_service.delete(self._conn, s.id)
+            session_service.delete_many(
+                self._conn,
+                [session.id for session in sel],
+                now_utc=self._clock.now_utc(),
+            )
             self._signals.sessions_changed.emit()
             self._signals.tasks_changed.emit()
         except AppError as exc:

@@ -198,8 +198,13 @@ class _SubjectRow(QWidget):
         if dlg.exec() != SubjectDialog.DialogCode.Accepted:
             return
         try:
-            subject_service.rename(self._conn, self._subject.id, new_name=dlg.name)
-            subject_service.recolour(self._conn, self._subject.id, colour=dlg.colour)
+            subject_service.update(
+                self._conn,
+                self._subject.id,
+                name=dlg.name,
+                colour=dlg.colour,
+                created_at=self._clock.now_utc(),
+            )
             self._signals.subjects_changed.emit()
         except AppError as exc:
             warn(self, "Cannot edit subject", str(exc))
@@ -210,14 +215,14 @@ class _SubjectRow(QWidget):
                        "It will disappear from pickers but remain in history."):
             return
         try:
-            subject_service.archive(self._conn, self._subject.id)
+            subject_service.archive(self._conn, self._subject.id, self._clock.now_utc())
             self._signals.subjects_changed.emit()
         except AppError as exc:
             warn(self, "Cannot archive", str(exc))
 
     def _on_unarchive(self) -> None:
         try:
-            subject_service.unarchive(self._conn, self._subject.id)
+            subject_service.unarchive(self._conn, self._subject.id, self._clock.now_utc())
             self._signals.subjects_changed.emit()
         except AppError as exc:
             warn(self, "Cannot unarchive", str(exc))
@@ -228,7 +233,7 @@ class _SubjectRow(QWidget):
                        "This cannot be undone. The subject must have no linked tasks or sessions."):
             return
         try:
-            subject_service.delete(self._conn, self._subject.id)
+            subject_service.delete(self._conn, self._subject.id, self._clock.now_utc())
             self._signals.subjects_changed.emit()
         except AppError as exc:
             warn(self, "Cannot delete", str(exc))

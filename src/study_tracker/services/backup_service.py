@@ -14,9 +14,11 @@ import os
 import sqlite3
 import tempfile
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
+from study_tracker.core.clock import Clock
 from study_tracker.core.errors import DatabaseError
 
 log = logging.getLogger(__name__)
@@ -36,11 +38,14 @@ class BackupReport:
     sessions: int = 0
 
 
-def _timestamp() -> str:
-    return datetime.now(tz=UTC).strftime(_STAMP_FMT)
+def _timestamp(clock: Clock | None = None) -> str:
+    timestamp = (clock or Clock()).now_utc()
+    return datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ").strftime(_STAMP_FMT)
 
 
-def create_backup(source_conn: sqlite3.Connection, backup_dir: Path) -> Path:
+def create_backup(
+    source_conn: sqlite3.Connection, backup_dir: Path, clock: Clock | None = None
+) -> Path:
     """Copy the live database (including WAL) to *backup_dir*.
 
     Returns the path of the newly created backup file.
@@ -50,7 +55,7 @@ def create_backup(source_conn: sqlite3.Connection, backup_dir: Path) -> Path:
         backup_dir:  Directory to write the backup into (created if needed).
     """
     backup_dir.mkdir(parents=True, exist_ok=True)
-    dest = backup_dir / f"study_tracker_{_timestamp()}.db"
+    dest = backup_dir / f"study_tracker_{_timestamp(clock)}_{uuid4().hex[:8]}.db"
     try:
         dest_conn = sqlite3.connect(str(dest))
         with dest_conn:
@@ -125,7 +130,11 @@ def list_backups(backup_dir: Path) -> list[Path]:
     """Return backup files sorted newest-first."""
     if not backup_dir.exists():
         return []
-    files = sorted(backup_dir.glob("study_tracker_*.db"), reverse=True)
+    files = sorted(
+        backup_dir.glob("study_tracker_*.db"),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
     return list(files)
 
 

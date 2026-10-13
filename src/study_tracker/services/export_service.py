@@ -9,7 +9,7 @@ import tempfile
 from datetime import date, timedelta
 from pathlib import Path
 
-from study_tracker.db import sessions_repo, subjects_repo, tasks_repo
+from study_tracker.db import sessions_repo, settings_repo, subjects_repo, tasks_repo
 from study_tracker.services.stats_service import totals_for_range
 
 
@@ -148,7 +148,8 @@ def export_subject_summary(
         date_from=(date.fromisoformat(date_from) - timedelta(days=1)).isoformat(),
         date_to=date_to,
     )
-    totals = subject_totals(sessions, date_from, date_to)
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
+    totals = subject_totals(sessions, date_from, date_to, cutoff_minutes)
     names = {item.id: item.name for item in subjects_repo.get_all(conn)}
     grand_total = sum(totals.values())
     rows = [
@@ -169,6 +170,7 @@ def export_daily_by_subject(
     """Export a long-format daily-by-subject file suitable for a pivot table."""
     from study_tracker.domain.allocation import allocate_by_day
 
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
     names = {item.id: item.name for item in subjects_repo.get_all(conn)}
     totals: dict[tuple[str, int], int] = {}
     sessions = sessions_repo.get_all(
@@ -177,7 +179,7 @@ def export_daily_by_subject(
         date_to=date_to,
     )
     for session in sessions:
-        for day, seconds in allocate_by_day(session).items():
+        for day, seconds in allocate_by_day(session, cutoff_minutes).items():
             if date_from <= day <= date_to:
                 key = (day, session.subject_id)
                 totals[key] = totals.get(key, 0) + seconds

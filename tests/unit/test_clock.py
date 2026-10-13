@@ -1,5 +1,8 @@
 """Tests for core/clock.py"""
 
+import re
+from pathlib import Path
+
 from study_tracker.core.clock import Clock, FakeClock
 
 
@@ -48,6 +51,12 @@ class TestFakeClock:
         clock = FakeClock("2026-10-13T02:00:00Z", utc_offset_hours=-5)
         assert clock.local_date() == "2026-10-12"
 
+    def test_cutoff_can_be_changed(self):
+        clock = FakeClock("2026-10-13T02:00:00Z")
+        assert clock.local_date() == "2026-10-12"
+        clock.set_cutoff_minutes(0)
+        assert clock.local_date() == "2026-10-13"
+
 
 class TestRealClock:
     def test_now_utc_format(self):
@@ -66,3 +75,12 @@ class TestRealClock:
         clock = Clock()
         date = clock.local_date()
         assert re.match(r"^\d{4}-\d{2}-\d{2}$", date), date
+
+    def test_direct_wall_clock_reads_are_confined_to_clock_module(self):
+        source_root = Path(__file__).parents[2] / "src" / "study_tracker"
+        clock_path = source_root / "core" / "clock.py"
+        direct_clock_read = re.compile(r"\b(?:date|datetime)\.now\s*\(|\bdate\.today\s*\(")
+        for path in source_root.rglob("*.py"):
+            if path == clock_path:
+                continue
+            assert not direct_clock_read.search(path.read_text(encoding="utf-8")), path
