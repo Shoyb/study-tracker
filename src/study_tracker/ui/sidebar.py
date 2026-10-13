@@ -18,12 +18,8 @@ class Sidebar(QListWidget):
     _ITEMS = [
         ("📊", "Dashboard"),
         ("⏱", "Timer"),
-        ("✅", "Tasks"),
-        ("🧾", "Exams"),
-        ("📋", "History"),
-        ("📅", "Calendar"),
+        ("🗂", "Records"),
         ("📈", "Analytics"),
-        ("📚", "Subjects"),
         ("⚙", "Settings"),
     ]
 

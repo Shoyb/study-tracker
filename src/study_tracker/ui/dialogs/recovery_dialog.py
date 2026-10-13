@@ -55,6 +55,8 @@ class RecoveryDialog(QDialog):
         s_dt = datetime.strptime(self._state.start_utc, "%Y-%m-%dT%H:%M:%SZ")
         h_dt = datetime.strptime(self._state.last_heartbeat, "%Y-%m-%dT%H:%M:%SZ")
         dur = max(1, self._state.paused_secs + int((h_dt - s_dt).total_seconds()))
+        if self._state.mode == "countdown" and self._state.countdown_target_seconds is not None:
+            dur = min(dur, self._state.countdown_target_seconds)
 
         is_pomodoro_break = self._state.mode == "pomodoro" and self._state.phase != "focus"
         title_lbl = QLabel(
@@ -80,6 +82,9 @@ class RecoveryDialog(QDialog):
             f"</ul>"
             f"<p><i>Time after the last recorded activity is not counted.</i></p>"
             )
+            if self._state.mode == "countdown" and self._state.countdown_target_seconds is not None:
+                remaining = max(0, self._state.countdown_target_seconds - dur)
+                info_text += f"<p><b>Countdown remaining:</b> {format_duration(remaining)}</p>"
         info_lbl = QLabel(info_text)
         info_lbl.setWordWrap(True)
         layout.addWidget(info_lbl)

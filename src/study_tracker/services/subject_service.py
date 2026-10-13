@@ -10,7 +10,7 @@ import logging
 import sqlite3
 
 from study_tracker.core.errors import ConflictError, NotFoundError
-from study_tracker.db import subjects_repo
+from study_tracker.db import subject_daily_goals_repo, subjects_repo
 from study_tracker.db.subjects_repo import Subject
 from study_tracker.domain.validation import validate_subject_colour, validate_subject_name
 from study_tracker.services.undo.adapters import snapshot
@@ -18,8 +18,8 @@ from study_tracker.services.undo.journal import JournalService
 
 log = logging.getLogger(__name__)
 
-# Names that may never be renamed, archived or deleted.
-_PROTECTED = frozenset()  # No hard-coded protected names per plan; Uncategorized removed
+# Names reserved for system-managed categories.
+_PROTECTED = frozenset({"no subject"})
 
 
 def _assert_exists(subject: Subject | None, subject_id: int) -> Subject:
@@ -94,6 +94,8 @@ def update(
 ) -> Subject:
     subject = _assert_exists(subjects_repo.get_by_id(conn, subject_id), subject_id)
     name = validate_subject_name(name)
+    if subject.name.casefold() in _PROTECTED and name.casefold() != subject.name.casefold():
+        raise ConflictError(f'The "{subject.name}" category cannot be renamed.')
     colour = validate_subject_colour(colour)
     _check_unique(conn, name, exclude_id=subject_id)
     before = snapshot(conn, "subject", subject_id)
@@ -152,6 +154,8 @@ def reorder(conn: sqlite3.Connection, ordered_ids: list[int]) -> None:
 
 def archive(conn: sqlite3.Connection, subject_id: int, now_utc: str | None = None) -> Subject:
     subject = _assert_exists(subjects_repo.get_by_id(conn, subject_id), subject_id)
+    if subject.name.casefold() in _PROTECTED:
+        raise ConflictError(f'The "{subject.name}" category cannot be archived.')
     before = snapshot(conn, "subject", subject_id)
     with JournalService(conn).action("Archive subject", now_utc or subject.created_at) as record:
         subjects_repo.update(
@@ -185,6 +189,8 @@ def unarchive(conn: sqlite3.Connection, subject_id: int, now_utc: str | None = N
 def delete(conn: sqlite3.Connection, subject_id: int, now_utc: str | None = None) -> None:
     """Delete a subject.  Raises if tasks or sessions reference it."""
     subject = _assert_exists(subjects_repo.get_by_id(conn, subject_id), subject_id)
+    if subject.name.casefold() in _PROTECTED:
+        raise ConflictError(f'The "{subject.name}" category cannot be deleted.')
 
     # Check for referencing tasks.
     task_row = conn.execute(
@@ -208,6 +214,7 @@ def delete(conn: sqlite3.Connection, subject_id: int, now_utc: str | None = None
 
     before = snapshot(conn, "subject", subject_id)
     with JournalService(conn).action("Delete subject", now_utc or subject.created_at) as record:
+        subject_daily_goals_repo.remove_subject(conn, subject_id)
         subjects_repo.delete(conn, subject_id)
         record("subject", subject_id, "delete", before, None)
     log.info("Subject %d deleted.", subject_id)

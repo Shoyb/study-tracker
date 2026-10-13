@@ -55,6 +55,10 @@ def get_day_plan(conn: sqlite3.Connection, local_date: str) -> sqlite3.Row | Non
     ).fetchone()
 
 
+def get_all_day_plans(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT * FROM day_plans ORDER BY local_date DESC").fetchall()
+
+
 def upsert_day_plan(
     conn: sqlite3.Connection,
     *,

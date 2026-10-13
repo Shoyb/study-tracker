@@ -25,9 +25,11 @@ from PySide6.QtWidgets import (
 
 from study_tracker.core.errors import AppError
 from study_tracker.core.formatting import format_date, format_duration, format_time
+from study_tracker.db import subjects_repo
 from study_tracker.db.sessions_repo import Session
 from study_tracker.services import session_service, subject_service, task_service
 from study_tracker.ui.dialogs.session_dialog import SessionDialog
+from study_tracker.ui.dialogs.split_session_dialog import SplitSessionDialog
 from study_tracker.ui.signals import AppSignals
 from study_tracker.ui.widgets.confirm import confirm, warn
 
@@ -163,6 +165,11 @@ class HistoryPage(QWidget):
         self._edit_btn.setEnabled(False)
         self._edit_btn.clicked.connect(self._on_edit)
         footer.addWidget(self._edit_btn)
+
+        self._split_btn = QPushButton("Split unassigned")
+        self._split_btn.setEnabled(False)
+        self._split_btn.clicked.connect(self._on_split_unassigned)
+        footer.addWidget(self._split_btn)
 
         self._del_btn = QPushButton("Delete")
         self._del_btn.setEnabled(False)
@@ -314,6 +321,8 @@ class HistoryPage(QWidget):
         sel = self._selected_sessions()
         self._edit_btn.setEnabled(len(sel) == 1)
         self._del_btn.setEnabled(len(sel) >= 1)
+        subject = subjects_repo.get_by_id(self._conn, sel[0].subject_id) if len(sel) == 1 else None
+        self._split_btn.setEnabled(bool(subject and subject.name.casefold() == "no subject"))
 
     def _on_double_clicked(self) -> None:
         if len(self._selected_sessions()) == 1:
@@ -406,6 +415,44 @@ class HistoryPage(QWidget):
             self._signals.tasks_changed.emit()
         except AppError as exc:
             warn(self, "Cannot update session", str(exc))
+
+    def _on_split_unassigned(self) -> None:
+        selected = self._selected_sessions()
+        if len(selected) != 1:
+            return
+        session = selected[0]
+        dialog = SplitSessionDialog(self._conn, session, self)
+        if dialog.exec() != SplitSessionDialog.DialogCode.Accepted:
+            return
+        allocations = dialog.allocations
+        keep_unassigned_seconds = dialog.keep_unassigned_seconds
+        if not allocations and keep_unassigned_seconds == session.duration_secs:
+            return
+
+        allow_timed_conversion = False
+        if session.start_utc is not None:
+            allow_timed_conversion = confirm(
+                self,
+                "Convert timed session",
+                "Splitting this session will remove its start and end times.",
+                "The resulting subject records will keep the date and durations only.",
+            )
+            if not allow_timed_conversion:
+                return
+
+        try:
+            session_service.split_unassigned_session(
+                self._conn,
+                session.id,
+                allocations,
+                keep_unassigned_seconds=keep_unassigned_seconds,
+                allow_timed_conversion=allow_timed_conversion,
+                now_utc=self._clock.now_utc(),
+            )
+            self._signals.sessions_changed.emit()
+            self._signals.tasks_changed.emit()
+        except AppError as exc:
+            warn(self, "Cannot split session", str(exc))
 
     def _on_delete(self) -> None:
         sel = self._selected_sessions()

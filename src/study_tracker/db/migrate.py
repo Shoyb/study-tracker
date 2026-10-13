@@ -26,7 +26,7 @@ _MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 def _migration_files() -> list[tuple[int, Path]]:
     """Return migration files supported by the current application release.
 
-    Version 8 activates exam definitions and scoring. Later extension
+    Version 11 adds persistent countdown timer state. Later extension
     migrations remain inactive until their features are integrated.
     """
     result: list[tuple[int, Path]] = []
@@ -34,7 +34,7 @@ def _migration_files() -> list[tuple[int, Path]]:
         stem = p.stem
         try:
             num = int(stem.split("_")[0])
-            if num > 8:
+            if num > 11:
                 log.info("Ignoring unsupported future migration file: %s", p.name)
                 continue
             result.append((num, p))

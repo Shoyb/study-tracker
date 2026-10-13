@@ -116,6 +116,16 @@ def task_time_for_range(
     return totals
 
 
+def subject_time_for_range(
+    conn: sqlite3.Connection, *, start: str, end: str
+) -> dict[int, int]:
+    """Return cutoff-allocated seconds for each subject in a date range."""
+    cutoff_minutes = int(settings_repo.get(conn, "day_cutoff_minutes") or "180")
+    return stats.subject_totals(
+        _sessions_for_range(conn, start, end), start, end, cutoff_minutes
+    )
+
+
 def completions_by_week(
     conn: sqlite3.Connection, *, start: str, end: str, week_start: str
 ) -> dict[str, int]:

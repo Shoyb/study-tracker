@@ -176,7 +176,10 @@ class _SubjectRow(QWidget):
         edit_btn.clicked.connect(self._on_edit)
         layout.addWidget(edit_btn)
 
-        if self._subject.archived:
+        is_unassigned = self._subject.name.casefold() == "no subject"
+        if is_unassigned:
+            name_lbl.setToolTip("Used for sessions when you did not track a subject.")
+        elif self._subject.archived:
             unarchive_btn = QPushButton("Unarchive")
             unarchive_btn.setProperty("flat", True)
             unarchive_btn.clicked.connect(self._on_unarchive)
@@ -187,11 +190,12 @@ class _SubjectRow(QWidget):
             archive_btn.clicked.connect(self._on_archive)
             layout.addWidget(archive_btn)
 
-        del_btn = QPushButton("Delete")
-        del_btn.setProperty("flat", True)
-        del_btn.setStyleSheet("color: #D32F2F;")
-        del_btn.clicked.connect(self._on_delete)
-        layout.addWidget(del_btn)
+        if not is_unassigned:
+            del_btn = QPushButton("Delete")
+            del_btn.setProperty("flat", True)
+            del_btn.setStyleSheet("color: #D32F2F;")
+            del_btn.clicked.connect(self._on_delete)
+            layout.addWidget(del_btn)
 
     def _on_edit(self) -> None:
         dlg = SubjectDialog(self._conn, self, subject=self._subject)

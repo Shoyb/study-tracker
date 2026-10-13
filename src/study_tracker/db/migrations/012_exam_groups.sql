@@ -1,4 +1,4 @@
--- Migration 009 – manual groups for exam statistics.
+-- Migration 012 - manual groups for exam statistics.
 CREATE TABLE IF NOT EXISTS exam_groups (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     name       TEXT NOT NULL UNIQUE,
@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS exam_group_members (
     group_id  INTEGER NOT NULL REFERENCES exam_groups(id) ON DELETE CASCADE,
     PRIMARY KEY (exam_id, group_id)
 );
-PRAGMA user_version = 9;
+PRAGMA user_version = 12;

@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -91,11 +92,23 @@ class CalendarPage(QWidget):
         self._grid.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._grid.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self._grid.cellClicked.connect(self._select_cell)
+        self._grid.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._grid.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._grid.verticalHeader().setDefaultSectionSize(48)
+        self._grid.setFixedHeight(330)
         root.addWidget(self._grid)
 
+        details_scroll = QScrollArea()
+        self._details_scroll = details_scroll
+        details_scroll.setWidgetResizable(True)
+        details_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        details = QWidget()
+        details_scroll.setWidget(details)
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
         self._day_title = QLabel()
         self._day_title.setStyleSheet("font-size: 13pt; font-weight: bold; padding-top: 8px;")
-        root.addWidget(self._day_title)
+        details_layout.addWidget(self._day_title)
         carryover = QHBoxLayout()
         self._carryover_label = QLabel()
         self._carryover_label.setWordWrap(True)
@@ -103,15 +116,17 @@ class CalendarPage(QWidget):
         self._carryover_button.clicked.connect(self._move_carryover_tasks)
         carryover.addWidget(self._carryover_label, 1)
         carryover.addWidget(self._carryover_button)
-        root.addLayout(carryover)
+        details_layout.addLayout(carryover)
         self._sessions = QTableWidget(0, 4)
         self._sessions.setHorizontalHeaderLabels(["Time", "Duration", "Subject", "Task"])
         self._sessions.verticalHeader().hide()
         self._sessions.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        root.addWidget(self._sessions)
+        self._sessions.setFixedHeight(150)
+        details_layout.addWidget(self._sessions)
 
         self._calendar_items = QListWidget()
-        root.addWidget(self._calendar_items)
+        self._calendar_items.setMinimumHeight(100)
+        details_layout.addWidget(self._calendar_items)
         actions = QHBoxLayout()
         self._add_note = QPushButton("Add note")
         self._add_event = QPushButton("Add event")
@@ -132,7 +147,9 @@ class CalendarPage(QWidget):
             self._schedule_task,
         ):
             actions.addWidget(button)
-        root.addLayout(actions)
+        details_layout.addLayout(actions)
+        details_layout.addStretch()
+        root.addWidget(details_scroll, 1)
 
     def _shift_month(self, amount: int) -> None:
         self._month += amount

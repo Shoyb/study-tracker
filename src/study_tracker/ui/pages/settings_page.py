@@ -9,16 +9,18 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from PySide6.QtCore import QTime
+from PySide6.QtCore import Qt, QTime
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTimeEdit,
     QVBoxLayout,
@@ -29,7 +31,7 @@ from study_tracker import __version__
 from study_tracker.core import paths
 from study_tracker.core.errors import AppError
 from study_tracker.db import exams_repo, settings_repo
-from study_tracker.services import day_plan_service
+from study_tracker.services import day_plan_service, subject_daily_goal_service, subject_service
 from study_tracker.services.backup_service import backup_report, create_backup
 from study_tracker.services.export_service import (
     export_daily_by_subject,
@@ -46,7 +48,6 @@ from study_tracker.services.import_service import (
 )
 from study_tracker.services.pomodoro_service import PomodoroService
 from study_tracker.services.settings_service import change_study_day_cutoff
-from study_tracker.services.undo.journal import JournalService
 from study_tracker.ui.signals import AppSignals
 from study_tracker.ui.widgets.confirm import alert, confirm, warn
 
@@ -72,22 +73,35 @@ class SettingsPage(QWidget):
         self._database_path = database_path
         self._log_path = log_path
         self._build_ui()
-        self._signals.calendar_changed.connect(self._refresh_journal_size)
-        self._signals.sessions_changed.connect(self._refresh_journal_size)
-        self._signals.tasks_changed.connect(self._refresh_journal_size)
-        self._signals.subjects_changed.connect(self._refresh_journal_size)
+        self._signals.subjects_changed.connect(self._reload_subject_daily_goal_subjects)
 
     def _button(self, text: str, slot) -> QPushButton:
         button = QPushButton(text)
         button.clicked.connect(slot)
         return button
 
+    def _section_heading(self, text: str) -> QLabel:
+        heading = QLabel(text)
+        heading.setStyleSheet("font-size: 12pt; font-weight: 600; padding-top: 12px;")
+        return heading
+
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        page_layout = QVBoxLayout(self)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        self._scroll_area = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+
+        root = QVBoxLayout(content)
         root.setContentsMargins(24, 24, 24, 24)
         root.addWidget(QLabel("<h2>Settings & Data</h2>"))
 
         form = QFormLayout()
+        form.addRow(self._section_heading("General"))
         self._data_path = QLabel(str(self._database_path or "Connected database"))
         self._data_path.setWordWrap(True)
         form.addRow("Database:", self._data_path)
@@ -99,6 +113,7 @@ class SettingsPage(QWidget):
         cutoff_row.addWidget(self._button("Apply cutoff", self._change_cutoff))
         cutoff_row.addStretch()
         form.addRow("Study day ends at:", cutoff_row)
+        form.addRow(self._section_heading("Study goals and alerts"))
         self._baseline_alerts = QCheckBox("Enable baseline study-goal alerts")
         self._baseline_alerts.setChecked(
             settings_repo.get(self._conn, "baseline_alerts_enabled") != "0"
@@ -139,25 +154,51 @@ class SettingsPage(QWidget):
             ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
         ):
             self._goal_weekday.addItem(label, weekday)
-        self._goal_minutes = QSpinBox()
-        self._goal_minutes.setRange(0, 1440)
-        self._goal_minutes.setSuffix(" min")
+        self._goal_hours = QDoubleSpinBox()
+        self._goal_hours.setRange(0, 24)
+        self._goal_hours.setSingleStep(0.5)
+        self._goal_hours.setDecimals(1)
+        self._goal_hours.setSuffix(" h")
+        self._goal_exam_count = QSpinBox()
+        self._goal_exam_count.setRange(0, 1000)
+        self._goal_exam_count.setSuffix(" exams")
         self._goal_weekday.currentIndexChanged.connect(self._load_weekday_goal)
         goal_row = QHBoxLayout()
-        goal_row.addWidget(self._goal_weekday)
-        goal_row.addWidget(self._goal_minutes)
+        goal_row.addWidget(self._goal_hours)
         goal_row.addWidget(self._button("Save weekday goal", self._save_weekday_goal))
         goal_row.addStretch()
-        form.addRow("Default study target:", goal_row)
+        form.addRow("Weekday:", self._goal_weekday)
+        form.addRow("Minimum study:", goal_row)
+        exam_goal_row = QHBoxLayout()
+        exam_goal_row.addWidget(self._goal_exam_count)
+        exam_goal_row.addStretch()
+        form.addRow("Minimum exams:", exam_goal_row)
+        form.addRow("", QLabel("Set either minimum to 0 to disable that target."))
         self._load_weekday_goal()
         form.addRow("", self._button("Apply alert settings", self._save_alert_settings))
+        form.addRow(self._section_heading("Per-subject daily targets"))
+        self._subject_goal_subject = QComboBox()
+        self._subject_goal_subject.currentIndexChanged.connect(self._load_subject_daily_goal)
+        self._subject_goal_minutes = QSpinBox()
+        self._subject_goal_minutes.setRange(0, 1440)
+        self._subject_goal_minutes.setSuffix(" min")
+        subject_goal_row = QHBoxLayout()
+        subject_goal_row.addWidget(self._subject_goal_subject)
+        subject_goal_row.addWidget(self._subject_goal_minutes)
+        self._subject_goal_save = self._button("Save target", self._save_subject_daily_goal)
+        subject_goal_row.addWidget(self._subject_goal_save)
+        subject_goal_row.addStretch()
+        form.addRow("Subject target:", subject_goal_row)
+        self._reload_subject_daily_goal_subjects()
+        form.addRow(self._section_heading("Appearance"))
         self._theme = QComboBox()
         self._theme.addItem("Light", "light")
         self._theme.addItem("Dark", "dark")
-        theme_index = self._theme.findData(settings_repo.get(self._conn, "theme") or "light")
+        theme_index = self._theme.findData(settings_repo.get(self._conn, "theme") or "dark")
         self._theme.setCurrentIndex(max(0, theme_index))
         self._theme.currentIndexChanged.connect(self._save_theme)
         form.addRow("Theme:", self._theme)
+        form.addRow(self._section_heading("Exam setup"))
         self._exam_categories = QComboBox()
         self._exam_levels = QComboBox()
         self._exam_lookup_name = QLineEdit()
@@ -189,6 +230,7 @@ class SettingsPage(QWidget):
         scoring_buttons.addStretch()
         form.addRow("", scoring_buttons)
         self._reload_scoring_presets()
+        form.addRow(self._section_heading("Pomodoro presets"))
         self._pomodoro_service = PomodoroService(self._conn)
         self._pomodoro_presets = QComboBox()
         self._pomodoro_presets.currentIndexChanged.connect(self._load_pomodoro_preset)
@@ -224,31 +266,13 @@ class SettingsPage(QWidget):
         pomodoro_buttons.addStretch()
         form.addRow("", pomodoro_buttons)
         self._reload_pomodoro_presets()
-        undo_row = QHBoxLayout()
-        self._undo_entries = QSpinBox()
-        self._undo_entries.setRange(1, 5000)
-        self._undo_entries.setValue(
-            int(settings_repo.get(self._conn, "undo_keep_entries") or "500")
-        )
-        self._undo_days = QSpinBox()
-        self._undo_days.setRange(1, 3650)
-        self._undo_days.setValue(int(settings_repo.get(self._conn, "undo_keep_days") or "30"))
-        undo_row.addWidget(QLabel("Keep"))
-        undo_row.addWidget(self._undo_entries)
-        undo_row.addWidget(QLabel("actions for"))
-        undo_row.addWidget(self._undo_days)
-        undo_row.addWidget(QLabel("days"))
-        undo_row.addWidget(self._button("Apply", self._save_undo_retention))
-        undo_row.addStretch()
-        form.addRow("Undo history:", undo_row)
-        self._journal_size = QLabel()
-        self._refresh_journal_size()
-        form.addRow("Recorded actions:", self._journal_size)
+        form.addRow(self._section_heading("Backup retention"))
         self._copies = QSpinBox()
         self._copies.setRange(1, 100)
         self._copies.setValue(int(settings_repo.get(self._conn, "backup_copies") or "10"))
         self._copies.valueChanged.connect(self._save_backup_copies)
         form.addRow("Automatic copies kept:", self._copies)
+        form.addRow(self._section_heading("Application details"))
         form.addRow("Version:", QLabel(__version__))
         form.addRow("Log file:", QLabel(str(self._log_path or "Application log")))
         root.addLayout(form)
@@ -303,21 +327,76 @@ class SettingsPage(QWidget):
         if weekday is None:
             return
         row = self._conn.execute(
-            "SELECT study_goal_secs FROM weekday_defaults WHERE weekday = ?", (weekday,)
+            "SELECT study_goal_secs, exam_goal_type, exam_goal_value "
+            "FROM weekday_defaults WHERE weekday = ?",
+            (weekday,),
         ).fetchone()
-        self._goal_minutes.setValue(int(row["study_goal_secs"] // 60) if row else 0)
+        self._goal_hours.setValue(
+            float(row["study_goal_secs"] / 3600) if row else 0
+        )
+        exam_count = (
+            int(row["exam_goal_value"])
+            if row and row["exam_goal_type"] == "count"
+            else 0
+        )
+        self._goal_exam_count.setValue(exam_count)
 
     def _save_weekday_goal(self) -> None:
         try:
             day_plan_service.set_weekday_study_goal_seconds(
                 self._conn,
                 int(self._goal_weekday.currentData()),
-                self._goal_minutes.value() * 60,
+                round(self._goal_hours.value() * 3600),
+            )
+            exam_count = self._goal_exam_count.value()
+            day_plan_service.set_weekday_exam_goal(
+                self._conn,
+                int(self._goal_weekday.currentData()),
+                goal_type="count" if exam_count else "none",
+                value=exam_count,
             )
         except AppError as exc:
             warn(self, "Invalid study target", str(exc))
             return
         self._signals.settings_changed.emit()
+
+    def _reload_subject_daily_goal_subjects(self) -> None:
+        previous_id = self._subject_goal_subject.currentData()
+        self._subject_goal_subject.blockSignals(True)
+        self._subject_goal_subject.clear()
+        for subject in subject_service.get_all(self._conn, include_archived=False):
+            self._subject_goal_subject.addItem(subject.name, subject.id)
+        index = self._subject_goal_subject.findData(previous_id)
+        if index < 0 and self._subject_goal_subject.count():
+            index = 0
+        self._subject_goal_subject.setCurrentIndex(index)
+        self._subject_goal_subject.blockSignals(False)
+        self._load_subject_daily_goal()
+
+    def _load_subject_daily_goal(self) -> None:
+        subject_id = self._subject_goal_subject.currentData()
+        enabled = subject_id is not None
+        self._subject_goal_minutes.setEnabled(enabled)
+        self._subject_goal_save.setEnabled(enabled)
+        if enabled:
+            seconds = subject_daily_goal_service.get_daily_goal_seconds(self._conn, subject_id)
+            self._subject_goal_minutes.setValue(seconds // 60)
+        else:
+            self._subject_goal_minutes.setValue(0)
+
+    def _save_subject_daily_goal(self) -> None:
+        subject_id = self._subject_goal_subject.currentData()
+        if subject_id is None:
+            return
+        try:
+            subject_daily_goal_service.set_daily_goal_seconds(
+                self._conn, subject_id, self._subject_goal_minutes.value() * 60
+            )
+        except AppError as exc:
+            warn(self, "Invalid subject target", str(exc))
+            return
+        self._signals.settings_changed.emit()
+        self._message.setText(f"Saved daily target for {self._subject_goal_subject.currentText()}.")
 
     def _save_alert_settings(self) -> None:
         margins = tuple(spin.value() for spin in self._alert_margins)
@@ -530,28 +609,6 @@ class SettingsPage(QWidget):
             self._signals.settings_changed.emit()
         except AppError as exc:
             warn(self, "Cannot save Pomodoro preset", str(exc))
-
-    def _save_undo_retention(self) -> None:
-        settings_repo.set_many(
-            self._conn,
-            {
-                "undo_keep_entries": str(self._undo_entries.value()),
-                "undo_keep_days": str(self._undo_days.value()),
-            },
-        )
-        JournalService(self._conn).purge(
-            self._clock.now_utc(),
-            keep_entries=self._undo_entries.value(),
-            keep_days=self._undo_days.value(),
-        )
-        self._refresh_journal_size()
-        self._signals.settings_changed.emit()
-
-    def _refresh_journal_size(self) -> None:
-        count = self._conn.execute(
-            "SELECT COUNT(DISTINCT group_id) FROM change_journal"
-        ).fetchone()[0]
-        self._journal_size.setText(str(count))
 
     def _change_cutoff(self) -> None:
         new_cutoff = self._cutoff_time.time().hour() * 60 + self._cutoff_time.time().minute()

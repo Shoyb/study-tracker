@@ -307,6 +307,106 @@ def delete_many(
     return len(existing)
 
 
+def split_unassigned_session(
+    conn: sqlite3.Connection,
+    session_id: int,
+    allocations: dict[int, int],
+    *,
+    keep_unassigned_seconds: int,
+    allow_timed_conversion: bool = False,
+    now_utc: str,
+) -> list[Session]:
+    """Split a No subject session into subject-specific duration records."""
+    existing = sessions_repo.get_by_id(conn, session_id)
+    if existing is None:
+        raise NotFoundError(f"Session {session_id} not found.")
+    subject = subjects_repo.get_by_id(conn, existing.subject_id)
+    if subject is None or subject.name.casefold() != "no subject":
+        raise ValidationError("Only sessions recorded as No subject can be split.")
+    if existing.task_id is not None:
+        raise ValidationError("A session linked to a task cannot be split.")
+    if existing.pomodoro_run_id is not None:
+        raise ValidationError("A Pomodoro session cannot be split without changing its count.")
+    if not isinstance(keep_unassigned_seconds, int) or keep_unassigned_seconds < 0:
+        raise ValidationError("Unassigned time cannot be negative.")
+    if not allocations and keep_unassigned_seconds == existing.duration_secs:
+        return [existing]
+    if existing.start_utc and not allow_timed_conversion:
+        raise ValidationError("Confirm converting this timed session to duration-only records.")
+    if not allocations:
+        raise ValidationError("Choose at least one subject for the split.")
+
+    normalized: dict[int, int] = {}
+    for subject_id, seconds in allocations.items():
+        if not isinstance(subject_id, int) or isinstance(subject_id, bool):
+            raise ValidationError("Each split must select a valid subject.")
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds <= 0:
+            raise ValidationError("Each subject allocation must be a positive number of seconds.")
+        _assert_subject_exists(conn, subject_id)
+        target = subjects_repo.get_by_id(conn, subject_id)
+        if target is None or target.name.casefold() == "no subject":
+            raise ValidationError("Choose named subjects for allocated time.")
+        normalized[subject_id] = seconds
+
+    if sum(normalized.values()) + keep_unassigned_seconds != existing.duration_secs:
+        raise ValidationError(
+            "Subject allocations and unassigned time must equal the session total."
+        )
+
+    local_date = existing.local_date
+    notes = existing.notes
+    offset = existing.utc_offset_mins
+    created: list[Session] = []
+    with JournalService(conn).action("Split unassigned session", now_utc) as record:
+        for subject_id, seconds in normalized.items():
+            new_id = sessions_repo.insert(
+                conn,
+                uuid=str(uuid.uuid4()),
+                subject_id=subject_id,
+                task_id=None,
+                local_date=local_date,
+                start_utc=None,
+                end_utc=None,
+                duration_secs=seconds,
+                session_type="manual_duration",
+                notes=notes,
+                utc_offset_mins=offset,
+                created_at=now_utc,
+            )
+            record("session", new_id, "create", None, snapshot(conn, "session", new_id))
+            split_session = sessions_repo.get_by_id(conn, new_id)
+            assert split_session is not None
+            created.append(split_session)
+
+        if keep_unassigned_seconds:
+            before = snapshot(conn, "session", session_id)
+            sessions_repo.update(
+                conn,
+                session_id,
+                subject_id=existing.subject_id,
+                task_id=None,
+                local_date=local_date,
+                start_utc=None,
+                end_utc=None,
+                duration_secs=keep_unassigned_seconds,
+                session_type="manual_duration",
+                notes=notes,
+                utc_offset_mins=offset,
+            )
+            record(
+                "session", session_id, "update", before, snapshot(conn, "session", session_id)
+            )
+            retained = sessions_repo.get_by_id(conn, session_id)
+            assert retained is not None
+            created.append(retained)
+        else:
+            before = snapshot(conn, "session", session_id)
+            sessions_repo.delete(conn, session_id)
+            record("session", session_id, "delete", before, None)
+
+    return created
+
+
 def get_all(
     conn: sqlite3.Connection,
     *,

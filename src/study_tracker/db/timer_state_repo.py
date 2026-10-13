@@ -17,6 +17,7 @@ class TimerState:
     pause_start: str | None
     notes: str
     mode: str = "stopwatch"
+    countdown_target_seconds: int | None = None
     phase: str | None = None
     phase_target_seconds: int | None = None
     completed_focus_count: int = 0
@@ -39,7 +40,12 @@ def _row_to_state(row: sqlite3.Row) -> TimerState:
         is_paused=bool(row["is_paused"]),
         pause_start=row["pause_start"],
         notes=row["notes"],
-        mode=row["mode"],
+        mode=(
+            row["mode"]
+            if row["mode"] == "pomodoro" and row["timer_kind"] == "stopwatch"
+            else row["timer_kind"]
+        ),
+        countdown_target_seconds=row["countdown_target_seconds"],
         phase=row["phase"],
         phase_target_seconds=row["phase_target_seconds"],
         completed_focus_count=row["completed_focus_count"],
@@ -62,11 +68,12 @@ def save(conn: sqlite3.Connection, state: TimerState) -> None:
     conn.execute(
         """INSERT INTO timer_state
            (id, subject_id, task_id, start_utc, last_heartbeat,
-            paused_secs, is_paused, pause_start, notes, mode, phase,
+            paused_secs, is_paused, pause_start, notes, mode, timer_kind,
+            countdown_target_seconds, phase,
             phase_target_seconds, completed_focus_count, pomodoro_run_id,
             preset_focus_seconds, preset_short_break_seconds, preset_long_break_seconds,
             preset_cycles_before_long_break, auto_start_break, auto_start_focus)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
                subject_id=excluded.subject_id,
                task_id=excluded.task_id,
@@ -77,6 +84,8 @@ def save(conn: sqlite3.Connection, state: TimerState) -> None:
                pause_start=excluded.pause_start,
                notes=excluded.notes,
                mode=excluded.mode,
+               timer_kind=excluded.timer_kind,
+               countdown_target_seconds=excluded.countdown_target_seconds,
                phase=excluded.phase,
                phase_target_seconds=excluded.phase_target_seconds,
                completed_focus_count=excluded.completed_focus_count,
@@ -89,7 +98,9 @@ def save(conn: sqlite3.Connection, state: TimerState) -> None:
                auto_start_focus=excluded.auto_start_focus""",
         (state.subject_id, state.task_id, state.start_utc, state.last_heartbeat,
            state.paused_secs, int(state.is_paused), state.pause_start, state.notes,
-           state.mode, state.phase, state.phase_target_seconds,
+           "stopwatch" if state.mode == "countdown" else state.mode,
+           state.mode, state.countdown_target_seconds,
+           state.phase, state.phase_target_seconds,
            state.completed_focus_count, state.pomodoro_run_id, state.preset_focus_seconds,
            state.preset_short_break_seconds, state.preset_long_break_seconds,
            state.preset_cycles_before_long_break, int(state.auto_start_break),

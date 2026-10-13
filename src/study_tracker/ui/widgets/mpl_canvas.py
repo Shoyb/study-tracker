@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from PySide6.QtCore import QTimer
 
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -15,6 +16,15 @@ class MplCanvas(FigureCanvasQTAgg):
         self.setParent(parent)
         self.setMinimumHeight(round(height * 100))
         self._hover_connections: list[int] = []
+        self._draw_timer = QTimer(self)
+        self._draw_timer.setSingleShot(True)
+        self._draw_timer.timeout.connect(self._draw_idle)
+
+    def draw_idle(self) -> None:
+        """Queue redraws on a timer owned by this widget, canceled on destruction."""
+        if not (getattr(self, "_draw_pending", False) or getattr(self, "_is_drawing", False)):
+            self._draw_pending = True
+            self._draw_timer.start(0)
 
     def redraw(self, draw_function, *args, **kwargs):
         """Clear the existing figure and invoke a backend-neutral chart function."""

@@ -6,7 +6,7 @@ import sqlite3
 
 _DEFAULTS: dict[str, str] = {
     "week_start": "saturday",
-    "theme": "light",
+    "theme": "dark",
     "streak_threshold_hrs": "6",
     "min_session_secs": "60",
     "chart_range_days": "30",
@@ -22,6 +22,7 @@ _DEFAULTS: dict[str, str] = {
     "undo_keep_entries": "500",
     "undo_keep_days": "30",
     "pomodoro_sound": "0",
+    "subject_daily_goals": "{}",
 }
 
 

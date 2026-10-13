@@ -55,6 +55,9 @@ class SubjectDialog(QDialog):
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("e.g. Physics")
         self._name_edit.setMaxLength(60)
+        if self._subject and self._subject.name.casefold() == "no subject":
+            self._name_edit.setReadOnly(True)
+            self._name_edit.setToolTip("Used for sessions when you did not track a subject.")
         form.addRow("Name:", self._name_edit)
 
         colour_row = QWidget()

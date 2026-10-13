@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -42,9 +43,7 @@ def _mcq(*, subject_id: int = 1, penalty: int = 250) -> ExamPart:
 
 
 def test_completed_exam_scores_and_undo_restores_parts_and_linked_session(conn):
-    category_id = conn.execute(
-        "SELECT id FROM exam_categories WHERE name = 'Weekly'"
-    ).fetchone()[0]
+    category_id = conn.execute("SELECT id FROM exam_categories WHERE name = 'Weekly'").fetchone()[0]
     exam = exam_service.create_exam(
         conn,
         title="Physics weekly",
@@ -230,13 +229,9 @@ def test_deleting_linked_session_clears_exam_link_and_undo_restores_it(conn):
 
 def test_category_statistics_filter_level_and_ignore_planned_exams(conn):
     categories = {
-        row["name"]: row["id"]
-        for row in exams_repo.lookup_values(conn, "exam_categories")
+        row["name"]: row["id"] for row in exams_repo.lookup_values(conn, "exam_categories")
     }
-    levels = {
-        row["name"]: row["id"]
-        for row in exams_repo.lookup_values(conn, "exam_levels")
-    }
+    levels = {row["name"]: row["id"] for row in exams_repo.lookup_values(conn, "exam_levels")}
     for title, category, level in (
         ("Daily engineering", "Daily", "Engineering"),
         ("Daily varsity", "Daily", "Varsity"),
@@ -273,3 +268,92 @@ def test_category_statistics_filter_level_and_ignore_planned_exams(conn):
     )
     assert len(engineering_daily) == 1
     assert engineering_daily[0].exam_count == 1
+
+
+def test_category_statistics_aggregate_marks_and_time_across_exam_dates(conn):
+    categories = {
+        row["name"]: row["id"] for row in exams_repo.lookup_values(conn, "exam_categories")
+    }
+    levels = {row["name"]: row["id"] for row in exams_repo.lookup_values(conn, "exam_levels")}
+    mcq_engineering = ExamPart(
+        kind="mcq",
+        total_questions=10,
+        correct=8,
+        incorrect=1,
+        skipped=1,
+        marks_per_correct_milli=1000,
+        penalty_per_incorrect_milli=250,
+        marks_per_skipped_milli=0,
+    )
+    written_engineering = ExamPart(
+        kind="written",
+        written_full_milli=50000,
+        written_obtained_milli=40000,
+    )
+    mcq_varsity = ExamPart(
+        kind="mcq",
+        total_questions=10,
+        correct=6,
+        incorrect=1,
+        skipped=3,
+        marks_per_correct_milli=1000,
+        penalty_per_incorrect_milli=250,
+        marks_per_skipped_milli=0,
+    )
+
+    for title, exam_date, category, level, seconds, part, status in (
+        ("Daily MCQ", "2026-10-01", "Daily", "Engineering", 3600, mcq_engineering, "completed"),
+        (
+            "Daily written",
+            "2026-10-05",
+            "Daily",
+            "Engineering",
+            7200,
+            written_engineering,
+            "completed",
+        ),
+        ("Daily varsity", "2026-10-08", "Daily", "Varsity", 2700, mcq_varsity, "completed"),
+        (
+            "Weekly engineering",
+            "2026-10-10",
+            "Weekly",
+            "Engineering",
+            1800,
+            mcq_engineering,
+            "completed",
+        ),
+        ("Blank upcoming", "2026-10-12", "Daily", "Engineering", None, None, "planned"),
+    ):
+        exam_service.create_exam(
+            conn,
+            title=title,
+            exam_date=exam_date,
+            category_id=categories[category],
+            level_id=levels[level],
+            status=status,
+            taken_seconds=seconds,
+            parts=(part,) if part is not None else (),
+            count_as_study=False,
+            now_utc=f"{exam_date}T12:00:00Z",
+        )
+
+    rows = category_statistics(conn)
+    by_group = {(row.category, row.level): row for row in rows}
+    daily_engineering = by_group[("Daily", "Engineering")]
+    assert daily_engineering.exam_count == 2
+    assert daily_engineering.score_milli == 47750
+    assert daily_engineering.full_milli == 60000
+    assert daily_engineering.net_accuracy == Decimal(47750) / 60000
+    assert daily_engineering.attempt_accuracy == Decimal(8) / 9
+    assert daily_engineering.raw_accuracy == Decimal(8) / 10
+    assert daily_engineering.time_taken_seconds == 10800
+    assert by_group[("Daily", "Varsity")].exam_count == 1
+    assert by_group[("Daily", "Varsity")].time_taken_seconds == 2700
+    assert by_group[("Weekly", "Engineering")].exam_count == 1
+    assert by_group[("Weekly", "Engineering")].time_taken_seconds == 1800
+
+    filtered = category_statistics(
+        conn, category_id=categories["Daily"], level_id=levels["Engineering"]
+    )
+    assert len(filtered) == 1
+    assert filtered[0].exam_count == 2

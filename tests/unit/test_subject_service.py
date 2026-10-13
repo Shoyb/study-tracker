@@ -103,6 +103,17 @@ class TestRename:
 
 
 class TestArchiveDelete:
+    def test_no_subject_category_cannot_be_renamed_archived_or_deleted(self, conn):
+        subject = next(
+            item for item in subject_service.get_all(conn) if item.name == "No subject"
+        )
+        with pytest.raises(ConflictError, match="cannot be renamed"):
+            subject_service.rename(conn, subject.id, new_name="General")
+        with pytest.raises(ConflictError, match="cannot be archived"):
+            subject_service.archive(conn, subject.id)
+        with pytest.raises(ConflictError, match="cannot be deleted"):
+            subject_service.delete(conn, subject.id)
+
     def test_archive_and_unarchive(self, conn):
         s = subject_service.create(conn, name="Temp", colour="#000000",
                                    created_at=CLOCK.now_utc())

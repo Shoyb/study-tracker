@@ -53,6 +53,7 @@ class TimerService:
         self._last_tick_mono: float = 0.0
         self._last_tick_wall: float = 0.0
         self._mode = "stopwatch"
+        self._countdown_target_seconds: int | None = None
         self._phase: str | None = None
         self._phase_target_seconds: int | None = None
         self._completed_focus_count = 0
@@ -144,9 +145,38 @@ class TimerService:
 
     @property
     def remaining_seconds(self) -> int:
-        if self._mode != "pomodoro" or self._phase_target_seconds is None:
+        if self._mode == "countdown":
+            target = self._countdown_target_seconds
+        else:
+            target = self._phase_target_seconds if self._mode == "pomodoro" else None
+        if target is None:
             return 0
-        return max(0, self._phase_target_seconds - self.elapsed_seconds())
+        return max(0, target - self.elapsed_seconds())
+
+    def start_countdown(
+        self,
+        subject_id: int,
+        target_seconds: int,
+        task_id: int | None = None,
+        notes: str = "",
+    ) -> None:
+        """Start a one-shot countdown that saves a session when it expires."""
+        validate_duration_secs(target_seconds)
+        self.start(subject_id=subject_id, task_id=task_id, notes=notes)
+        self._mode = "countdown"
+        self._countdown_target_seconds = target_seconds
+        self._phase_target_seconds = target_seconds
+        self._persist()
+
+    def advance_countdown_if_due(self, utc_offset_mins: int = 0) -> Session | None:
+        if (
+            self._mode != "countdown"
+            or not self._is_active
+            or self._is_paused
+            or self.remaining_seconds > 0
+        ):
+            return None
+        return self.stop(utc_offset_mins)
 
     def start_pomodoro(self, subject_id: int, task_id: int | None, notes: str, preset) -> None:
         self.start(subject_id=subject_id, task_id=task_id, notes=notes)
@@ -302,7 +332,10 @@ class TimerService:
             return None
 
         duration = self.elapsed_seconds()
-        if _next_phase is not None and self._phase_target_seconds is not None:
+        if (
+            self._mode in {"pomodoro", "countdown"}
+            and self._phase_target_seconds is not None
+        ):
             duration = min(duration, self._phase_target_seconds)
         if duration <= 0:
             duration = 1  # Minimum 1 second for database constraint
@@ -437,6 +470,7 @@ class TimerService:
         self._accumulated_secs = 0
         self._segment_start_mono = 0.0
         self._mode = "stopwatch"
+        self._countdown_target_seconds = None
         self._phase = None
         self._phase_target_seconds = None
         self._completed_focus_count = 0
@@ -466,6 +500,7 @@ class TimerService:
             mode=self._mode,
             phase=self._phase,
             phase_target_seconds=self._phase_target_seconds,
+                        countdown_target_seconds=self._countdown_target_seconds,
             completed_focus_count=self._completed_focus_count,
             pomodoro_run_id=self._pomodoro_run_id,
             preset_focus_seconds=self._preset_focus_seconds,
@@ -492,6 +527,7 @@ class TimerService:
         self._start_utc = state.start_utc
         self._last_heartbeat = state.last_heartbeat
         self._mode = state.mode
+        self._countdown_target_seconds = state.countdown_target_seconds
         self._phase = state.phase
         self._phase_target_seconds = state.phase_target_seconds
         self._completed_focus_count = state.completed_focus_count
@@ -535,6 +571,8 @@ class TimerService:
             h_dt = datetime.strptime(state.last_heartbeat, "%Y-%m-%dT%H:%M:%SZ")
             dur = max(1, state.paused_secs + int((h_dt - s_dt).total_seconds()))
             end_utc = state.last_heartbeat
+        if state.mode == "countdown" and state.countdown_target_seconds is not None:
+            dur = min(dur, state.countdown_target_seconds)
         start_dt = datetime.strptime(state.start_utc, "%Y-%m-%dT%H:%M:%SZ")
         end_dt = datetime.strptime(end_utc, "%Y-%m-%dT%H:%M:%SZ")
         if end_dt <= start_dt or int((end_dt - start_dt).total_seconds()) < dur:

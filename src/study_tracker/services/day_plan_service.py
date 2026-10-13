@@ -26,6 +26,15 @@ class ExamGoalProgress:
     completed: int
 
 
+@dataclass(frozen=True)
+class SavedDayPlan:
+    local_date: str
+    study_goal_secs: int | None
+    exam_goal_type: str | None
+    exam_goal_value: int | None
+    is_rest_day: bool
+
+
 def get_study_goal_seconds(conn: sqlite3.Connection, study_day: str) -> int:
     day = date.fromisoformat(study_day)
     plan = day_plans_repo.get_day_plan(conn, study_day)
@@ -33,6 +42,19 @@ def get_study_goal_seconds(conn: sqlite3.Connection, study_day: str) -> int:
         return int(plan["study_goal_secs"])
     default = day_plans_repo.get_weekday_default(conn, day.weekday())
     return int(default["study_goal_secs"]) if default is not None else 0
+
+
+def get_saved_day_plans(conn: sqlite3.Connection) -> list[SavedDayPlan]:
+    return [
+        SavedDayPlan(
+            local_date=row["local_date"],
+            study_goal_secs=row["study_goal_secs"],
+            exam_goal_type=row["exam_goal_type"],
+            exam_goal_value=row["exam_goal_value"],
+            is_rest_day=bool(row["is_rest_day"]),
+        )
+        for row in day_plans_repo.get_all_day_plans(conn)
+    ]
 
 
 def set_study_goal_seconds(

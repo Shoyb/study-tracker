@@ -15,7 +15,9 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -63,7 +65,16 @@ class TimerPage(QWidget):
         self._sync_with_timer_state()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        page_layout = QVBoxLayout(self)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        self._scroll_area.setWidget(content)
+        page_layout.addWidget(self._scroll_area)
+
+        root = QVBoxLayout(content)
         root.setContentsMargins(24, 24, 24, 24)
         root.setSpacing(16)
 
@@ -81,6 +92,7 @@ class TimerPage(QWidget):
         self._mode_combo = QComboBox()
         self._mode_combo.addItem("Stopwatch", "stopwatch")
         self._mode_combo.addItem("Pomodoro", "pomodoro")
+        self._mode_combo.addItem("Countdown", "countdown")
         self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         self._preset_combo = QComboBox()
         for preset in self._pomodoro.presets():
@@ -95,6 +107,23 @@ class TimerPage(QWidget):
         mode_row.addWidget(self._skip_break_btn)
         mode_row.addStretch()
         card_layout.addLayout(mode_row)
+
+        self._countdown_controls = QWidget()
+        countdown_row = QHBoxLayout(self._countdown_controls)
+        countdown_row.setContentsMargins(0, 0, 0, 0)
+        self._countdown_hours = QSpinBox()
+        self._countdown_hours.setRange(0, 24)
+        self._countdown_hours.setSuffix(" h")
+        self._countdown_minutes = QSpinBox()
+        self._countdown_minutes.setRange(0, 59)
+        self._countdown_minutes.setSuffix(" min")
+        self._countdown_minutes.setSingleStep(5)
+        self._countdown_minutes.setValue(25)
+        countdown_row.addWidget(QLabel("Countdown length:"))
+        countdown_row.addWidget(self._countdown_hours)
+        countdown_row.addWidget(self._countdown_minutes)
+        countdown_row.addStretch()
+        card_layout.addWidget(self._countdown_controls)
 
         # Elapsed display
         self._display = QLabel("00:00:00")
@@ -202,6 +231,7 @@ class TimerPage(QWidget):
                 col, QHeaderView.ResizeMode.ResizeToContents
             )
         self._today_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._today_table.setMinimumHeight(180)
         root.addWidget(self._today_table)
         self._on_mode_changed()
 
@@ -259,6 +289,8 @@ class TimerPage(QWidget):
         self._task_combo.setEnabled(not active)
         self._mode_combo.setEnabled(not active)
         self._preset_combo.setEnabled(not active)
+        self._countdown_hours.setEnabled(not active)
+        self._countdown_minutes.setEnabled(not active)
         self._skip_break_btn.setEnabled(
             active
             and self._timer.mode == "pomodoro"
@@ -266,8 +298,8 @@ class TimerPage(QWidget):
         )
 
         if active:
-            if self._timer.mode == "pomodoro":
-                self._mode_combo.setCurrentIndex(self._mode_combo.findData("pomodoro"))
+            if self._timer.mode in {"pomodoro", "countdown"}:
+                self._mode_combo.setCurrentIndex(self._mode_combo.findData(self._timer.mode))
             s_idx = self._subject_combo.findData(self._timer.subject_id)
             if s_idx >= 0 and self._subject_combo.currentIndex() != s_idx:
                 self._subject_combo.setCurrentIndex(s_idx)
@@ -278,8 +310,12 @@ class TimerPage(QWidget):
                 self._notes_edit.setText(self._timer.notes)
 
             self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
-            if self._timer.mode == "pomodoro":
-                phase = (self._timer.phase or "focus").replace("_", " ").title()
+            if self._timer.mode in {"pomodoro", "countdown"}:
+                phase = (
+                    (self._timer.phase or "focus").replace("_", " ").title()
+                    if self._timer.mode == "pomodoro"
+                    else "Countdown"
+                )
                 status = "Paused" if paused else phase
                 self._status_label.setText(status)
                 self._display.setText(format_duration_short(self._timer.remaining_seconds))
@@ -297,17 +333,28 @@ class TimerPage(QWidget):
     def _on_tick(self) -> None:
         if self._timer.is_active:
             previous_phase = self._timer.phase
-            completed = self._timer.advance_pomodoro_if_due(
-                self._clock.local_utc_offset_minutes()
-            )
+            previous_mode = self._timer.mode
+            if previous_mode == "countdown":
+                completed = self._timer.advance_countdown_if_due(
+                    self._clock.local_utc_offset_minutes()
+                )
+            else:
+                completed = self._timer.advance_pomodoro_if_due(
+                    self._clock.local_utc_offset_minutes()
+                )
             if completed is not None:
                 self._signals.sessions_changed.emit()
                 self._signals.tasks_changed.emit()
+                if previous_mode == "countdown":
+                    self._signals.timer_state_changed.emit()
+                    self._sync_with_timer_state()
+                    self._status_label.setText("Countdown complete. Session saved.")
+                    return
             if previous_phase != self._timer.phase and self._timer.phase is not None:
                 self._signals.pomodoro_phase_changed.emit(self._timer.phase)
             self._sync_with_timer_state()
             secs = self._timer.elapsed_seconds()
-            if self._timer.mode == "pomodoro":
+            if self._timer.mode in {"pomodoro", "countdown"}:
                 self._display.setText(format_duration_short(self._timer.remaining_seconds))
             else:
                 self._display.setText(format_duration_short(secs))
@@ -330,6 +377,20 @@ class TimerPage(QWidget):
                     preset_id, subject_id=subj_id, task_id=task_id, notes=notes
                 )
                 self._signals.pomodoro_phase_changed.emit("focus")
+            elif self._mode_combo.currentData() == "countdown":
+                target_seconds = (
+                    self._countdown_hours.value() * 3600
+                    + self._countdown_minutes.value() * 60
+                )
+                if target_seconds <= 0:
+                    warn(self, "Invalid countdown", "Choose a countdown longer than 0 minutes.")
+                    return
+                self._timer.start_countdown(
+                    subject_id=subj_id,
+                    target_seconds=target_seconds,
+                    task_id=task_id,
+                    notes=notes,
+                )
             else:
                 self._timer.start(subject_id=subj_id, task_id=task_id, notes=notes)
             self._sync_with_timer_state()
@@ -380,7 +441,9 @@ class TimerPage(QWidget):
             warn(self, "Cannot stop timer", str(exc))
 
     def _on_mode_changed(self) -> None:
-        self._preset_combo.setVisible(self._mode_combo.currentData() == "pomodoro")
+        mode = self._mode_combo.currentData()
+        self._preset_combo.setVisible(mode == "pomodoro")
+        self._countdown_controls.setVisible(mode == "countdown")
 
     def _skip_break(self) -> None:
         self._timer.skip_break()

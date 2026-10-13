@@ -10,21 +10,15 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractSpinBox,
-    QComboBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
     QStackedWidget,
     QStatusBar,
     QSystemTrayIcon,
-    QTextEdit,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -36,16 +30,11 @@ from study_tracker.core.formatting import format_duration, format_duration_short
 from study_tracker.db import settings_repo, subjects_repo, tasks_repo
 from study_tracker.services.alert_service import AlertService
 from study_tracker.services.timer_service import TimerService
-from study_tracker.services.undo.journal import JournalService
 from study_tracker.ui.notifications import NotificationBanner
 from study_tracker.ui.pages.analytics_page import AnalyticsPage
-from study_tracker.ui.pages.calendar_page import CalendarPage
 from study_tracker.ui.pages.dashboard_page import DashboardPage
-from study_tracker.ui.pages.exams_page import ExamsPage
-from study_tracker.ui.pages.history_page import HistoryPage
+from study_tracker.ui.pages.records_page import RecordsPage
 from study_tracker.ui.pages.settings_page import SettingsPage
-from study_tracker.ui.pages.subjects_page import SubjectsPage
-from study_tracker.ui.pages.tasks_page import TasksPage
 from study_tracker.ui.pages.timer_page import TimerPage
 from study_tracker.ui.sidebar import Sidebar
 from study_tracker.ui.signals import AppSignals
@@ -153,6 +142,9 @@ class TimerBar(QWidget):
             secs = self._timer_svc.remaining_seconds
             phase = (self._timer_svc.phase or "focus").replace("_", " ").title()
             phase_prefix = f"Pomodoro {phase} — "
+        elif self._timer_svc.mode == "countdown":
+            secs = self._timer_svc.remaining_seconds
+            phase_prefix = "Countdown — "
         else:
             secs = self._timer_svc.elapsed_seconds()
         self._elapsed_label.setText(format_duration_short(secs))
@@ -180,11 +172,8 @@ class MainWindow(QMainWindow):
         │                    │  ┌──────────────────┐ │
         │  Dashboard         │  │ Timer bar (top)  │ │
         │  Timer             │  ├──────────────────┤ │
-        │  Tasks             │  │                  │ │
-        │  History           │  │  Active page     │ │
-        │  Calendar          │  │                  │ │
+        │  Records           │  │  Active page     │ │
         │  Analytics         │  │                  │ │
-        │  Subjects          │  └──────────────────┘ │
         │  Settings          │                       │
         ├────────────────────────────────────────────┤
         │  Status bar                                │
@@ -194,12 +183,8 @@ class MainWindow(QMainWindow):
     _PAGE_NAMES = [
         "Dashboard",
         "Timer",
-        "Tasks",
-        "Exams",
-        "History",
-        "Calendar",
+        "Records",
         "Analytics",
-        "Subjects",
         "Settings",
     ]
 
@@ -236,13 +221,6 @@ class MainWindow(QMainWindow):
 
         self._signals.timer_state_changed.connect(self._update_timer_bar)
         self._signals.pomodoro_phase_changed.connect(self._notify_pomodoro_phase)
-        self._signals.sessions_changed.connect(self._update_undo_actions)
-        self._signals.tasks_changed.connect(self._update_undo_actions)
-        self._signals.subjects_changed.connect(self._update_undo_actions)
-        self._signals.calendar_changed.connect(self._update_undo_actions)
-        self._signals.exam_changed.connect(self._update_undo_actions)
-        self._update_undo_actions()
-
         QTimer.singleShot(0, self._check_startup_recovery)
         log.info("Main window initialised.")
 
@@ -278,14 +256,6 @@ class MainWindow(QMainWindow):
             parent=right_col,
         )
         self._notification_banner = NotificationBanner(right_col)
-        self._edit_toolbar = QToolBar("Edit history", right_col)
-        self._undo_action = self._edit_toolbar.addAction("Undo")
-        self._redo_action = self._edit_toolbar.addAction("Redo")
-        self._history_action = self._edit_toolbar.addAction("Undo History")
-        self._undo_action.triggered.connect(self._undo)
-        self._redo_action.triggered.connect(self._redo)
-        self._history_action.triggered.connect(self._show_undo_history)
-        right_layout.addWidget(self._edit_toolbar)
         right_layout.addWidget(self._notification_banner)
         right_layout.addWidget(self._timer_bar)
 
@@ -304,21 +274,14 @@ class MainWindow(QMainWindow):
                     self._conn, self._timer_svc, self._signals, self._clock
                 )
                 self._stack.addWidget(self._timer_page)
-            elif name == "Subjects" and self._conn is not None:
-                self._subjects_page = SubjectsPage(self._conn, self._signals, self._clock)
-                self._stack.addWidget(self._subjects_page)
-            elif name == "Tasks" and self._conn is not None:
-                self._tasks_page = TasksPage(self._conn, self._signals, self._clock)
-                self._stack.addWidget(self._tasks_page)
-            elif name == "Exams" and self._conn is not None:
-                self._exams_page = ExamsPage(self._conn, self._signals, self._clock)
-                self._stack.addWidget(self._exams_page)
-            elif name == "History" and self._conn is not None:
-                self._history_page = HistoryPage(self._conn, self._signals, self._clock)
-                self._stack.addWidget(self._history_page)
-            elif name == "Calendar" and self._conn is not None:
-                self._calendar_page = CalendarPage(self._conn, self._signals, self._clock)
-                self._stack.addWidget(self._calendar_page)
+            elif name == "Records" and self._conn is not None:
+                self._records_page = RecordsPage(self._conn, self._signals, self._clock)
+                self._history_page = self._records_page._history_page
+                self._tasks_page = self._records_page._tasks_page
+                self._subjects_page = self._records_page._subjects_page
+                self._exams_page = self._records_page._exams_page
+                self._calendar_page = self._records_page._calendar_page
+                self._stack.addWidget(self._records_page)
             elif name == "Analytics" and self._conn is not None:
                 self._analytics_page = AnalyticsPage(self._conn, self._signals, self._clock)
                 self._stack.addWidget(self._analytics_page)
@@ -344,86 +307,10 @@ class MainWindow(QMainWindow):
         self._status_bar.showMessage("Ready")
 
     def _setup_shortcuts(self) -> None:
-        """Ctrl+1 … Ctrl+8 navigate to the corresponding sidebar page."""
+        """Ctrl+1 onward navigates to the corresponding sidebar page."""
         for i in range(len(self._PAGE_NAMES)):
             sc = QShortcut(QKeySequence(f"Ctrl+{i + 1}"), self)
             sc.activated.connect(lambda idx=i: self._navigate(idx))
-        self._undo_shortcut = QShortcut(QKeySequence("Ctrl+Z"), self)
-        self._undo_shortcut.activated.connect(self._undo_if_not_editing)
-        self._redo_shortcut = QShortcut(QKeySequence("Ctrl+Y"), self)
-        self._redo_shortcut.activated.connect(self._redo_if_not_editing)
-
-    def _update_undo_actions(self) -> None:
-        if self._conn is None:
-            return
-        entries = JournalService(self._conn).history(limit=500)
-        undo_entry = next((entry for entry in entries if entry.undone_at_utc is None), None)
-        redo_entry = next((entry for entry in entries if entry.undone_at_utc is not None), None)
-        self._undo_action.setEnabled(undo_entry is not None)
-        self._redo_action.setEnabled(redo_entry is not None)
-        self._undo_action.setToolTip(
-            f"Undo: {undo_entry.summary}" if undo_entry else "Undo unavailable"
-        )
-        self._redo_action.setToolTip(
-            f"Redo: {redo_entry.summary}" if redo_entry else "Redo unavailable"
-        )
-
-    def _undo_if_not_editing(self) -> None:
-        if not isinstance(
-            self.focusWidget(),
-            (QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit),
-        ):
-            self._undo()
-
-    def _redo_if_not_editing(self) -> None:
-        if not isinstance(
-            self.focusWidget(),
-            (QAbstractSpinBox, QComboBox, QLineEdit, QPlainTextEdit, QTextEdit),
-        ):
-            self._redo()
-
-    def _after_journal_change(self) -> None:
-        self._signals.sessions_changed.emit()
-        self._signals.tasks_changed.emit()
-        self._signals.subjects_changed.emit()
-        self._signals.calendar_changed.emit()
-        self._signals.exam_changed.emit()
-        self._signals.timer_state_changed.emit()
-        self._update_undo_actions()
-
-    def _undo(self) -> None:
-        if self._conn is None:
-            return
-        try:
-            summary = JournalService(self._conn).undo(self._clock.now_utc())
-        except Exception as exc:
-            warn(self, "Cannot undo", str(exc))
-            return
-        if summary:
-            self._after_journal_change()
-            self.show_status(f"Undid: {summary}", timeout_ms=10000)
-
-    def _redo(self) -> None:
-        if self._conn is None:
-            return
-        try:
-            summary = JournalService(self._conn).redo(self._clock.now_utc())
-        except Exception as exc:
-            warn(self, "Cannot redo", str(exc))
-            return
-        if summary:
-            self._after_journal_change()
-            self.show_status(f"Redid: {summary}", timeout_ms=10000)
-
-    def _show_undo_history(self) -> None:
-        if self._conn is None:
-            return
-        from study_tracker.ui.dialogs.undo_history import UndoHistoryDialog
-
-        dialog = UndoHistoryDialog(
-            self._conn, self._clock, self._after_journal_change, self
-        )
-        dialog.exec()
 
     def _notify_pomodoro_phase(self, phase: str) -> None:
         label = phase.replace("_", " ").title()
@@ -521,11 +408,15 @@ class MainWindow(QMainWindow):
             and settings_repo.get(self._conn, "tray_minimize") != "0"
         )
 
+    def _ensure_tray_icon_visible(self) -> None:
+        if self._tray_icon is not None and not self._tray_icon.isVisible():
+            self._tray_icon.show()
+
     def changeEvent(self, event: QEvent) -> None:  # noqa: N802
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
             if self._tray_minimize_enabled():
-                self._tray_icon.show()
+                self._ensure_tray_icon_visible()
                 QTimer.singleShot(0, self.hide)
 
     # ------------------------------------------------------------------
@@ -672,9 +563,9 @@ class MainWindow(QMainWindow):
 
     def _show_history_date(self, local_date: str) -> None:
         """Navigate from a chart to the History view filtered to one day."""
-        if hasattr(self, "_history_page"):
-            self._history_page.show_date(local_date)
-        self._navigate(4)
+        if hasattr(self, "_records_page"):
+            self._records_page.show_history_date(local_date)
+            self._navigate(self._PAGE_NAMES.index("Records"))
 
     def _restore_from_settings(self, backup_path: Path) -> None:
         """Guard a destructive database replacement behind an idle timer."""

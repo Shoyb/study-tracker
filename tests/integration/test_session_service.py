@@ -8,7 +8,7 @@ import pytest
 
 from study_tracker.core.clock import FakeClock
 from study_tracker.core.errors import ConflictError, ValidationError
-from study_tracker.db import tasks_repo
+from study_tracker.db import sessions_repo, subjects_repo, tasks_repo
 from study_tracker.db.connection import get_connection
 from study_tracker.db.migrate import run_migrations
 from study_tracker.services import session_service, task_service
@@ -41,6 +41,97 @@ class TestManualTimed:
         assert sess.end_utc == "2026-10-13T09:30:00Z"
         assert sess.duration_secs == 5400
         assert sess.local_date == "2026-10-13"
+
+    def test_duration_session_can_use_no_subject_category(self, conn):
+        subject = subjects_repo.get_by_name(conn, "No subject")
+        assert subject is not None
+
+        session = session_service.add_manual_duration(
+            conn,
+            subject_id=subject.id,
+            local_date="2026-10-13",
+            duration_secs=3600,
+            created_at=CLOCK.now_utc(),
+        )
+
+        assert session.subject_id == subject.id
+        assert subjects_repo.get_by_id(conn, session.subject_id).name == "No subject"
+
+    def test_split_timed_unassigned_session_conserves_duration(self, conn):
+        unassigned = subjects_repo.get_by_name(conn, "No subject")
+        physics = subjects_repo.get_by_name(conn, "Physics")
+        mathematics = subjects_repo.get_by_name(conn, "Mathematics")
+        assert unassigned and physics and mathematics
+        original = session_service.add_manual_timed(
+            conn,
+            subject_id=unassigned.id,
+            start_utc="2026-10-13T08:00:00Z",
+            end_utc="2026-10-13T10:00:00Z",
+            duration_secs=7200,
+            notes="Mixed study",
+            created_at=CLOCK.now_utc(),
+        )
+
+        split = session_service.split_unassigned_session(
+            conn,
+            original.id,
+            {physics.id: 1800, mathematics.id: 3600},
+            keep_unassigned_seconds=1800,
+            allow_timed_conversion=True,
+            now_utc=CLOCK.now_utc(),
+        )
+
+        assert sum(session.duration_secs for session in split) == original.duration_secs
+        assert {session.subject_id for session in split} == {
+            unassigned.id, physics.id, mathematics.id
+        }
+        assert all(session.start_utc is None and session.end_utc is None for session in split)
+        assert all(session.session_type == "manual_duration" for session in split)
+        assert all(session.notes == "Mixed study" for session in split)
+        retained = sessions_repo.get_by_id(conn, original.id)
+        assert retained is not None and retained.duration_secs == 1800
+
+    def test_split_requires_confirmation_for_timed_session(self, conn):
+        unassigned = subjects_repo.get_by_name(conn, "No subject")
+        physics = subjects_repo.get_by_name(conn, "Physics")
+        assert unassigned and physics
+        original = session_service.add_manual_timed(
+            conn,
+            subject_id=unassigned.id,
+            start_utc="2026-10-13T08:00:00Z",
+            end_utc="2026-10-13T09:00:00Z",
+            created_at=CLOCK.now_utc(),
+        )
+
+        with pytest.raises(ValidationError, match="Confirm converting"):
+            session_service.split_unassigned_session(
+                conn,
+                original.id,
+                {physics.id: 3600},
+                keep_unassigned_seconds=0,
+                now_utc=CLOCK.now_utc(),
+            )
+
+    def test_split_rejects_non_unassigned_session(self, conn):
+        physics = subjects_repo.get_by_name(conn, "Physics")
+        mathematics = subjects_repo.get_by_name(conn, "Mathematics")
+        assert physics and mathematics
+        original = session_service.add_manual_duration(
+            conn,
+            subject_id=physics.id,
+            local_date="2026-10-13",
+            duration_secs=3600,
+            created_at=CLOCK.now_utc(),
+        )
+
+        with pytest.raises(ValidationError, match="Only sessions recorded as No subject"):
+            session_service.split_unassigned_session(
+                conn,
+                original.id,
+                {mathematics.id: 3600},
+                keep_unassigned_seconds=0,
+                now_utc=CLOCK.now_utc(),
+            )
 
     def test_touching_sessions_allowed(self, conn):
         # Session 1: 08:00 to 09:00

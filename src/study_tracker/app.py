@@ -191,7 +191,7 @@ class Application(QApplication):
         from study_tracker.db import settings_repo
 
         self.setWindowIcon(QIcon(str(paths.icon_path())))
-        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "light")
+        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "dark")
         self._signals = AppSignals(self)
         self._signals.settings_changed.connect(self._apply_saved_theme)
         self._clock = Clock(
@@ -215,7 +215,7 @@ class Application(QApplication):
     def _apply_saved_theme(self) -> None:
         from study_tracker.db import settings_repo
 
-        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "light")
+        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "dark")
 
     def _restore_database(self, backup_path) -> None:
         """Safety-back up, replace, reopen, and rebuild pages using the new database."""

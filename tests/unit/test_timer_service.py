@@ -94,6 +94,49 @@ class TestStopwatchLogic:
         assert sess.end_utc > sess.start_utc
 
 
+class TestCountdownLogic:
+    def test_countdown_pauses_and_saves_when_target_expires(self, conn):
+        clock = FakeClock("2026-10-13T10:00:00Z")
+        service = TimerService(conn, clock)
+        service.start_countdown(subject_id=1, target_seconds=120)
+
+        clock.advance(seconds=90)
+        assert service.remaining_seconds == 30
+        service.pause()
+        clock.advance(seconds=60)
+        assert service.remaining_seconds == 30
+        service.resume()
+        clock.advance(seconds=30)
+
+        session = service.advance_countdown_if_due()
+
+        assert session is not None
+        assert session.duration_secs == 120
+        assert not service.is_active
+        assert service.load_persisted_state() is None
+
+    def test_countdown_mode_and_target_survive_crash_recovery(self, conn):
+        clock = FakeClock("2026-10-13T10:00:00Z")
+        service = TimerService(conn, clock)
+        service.start_countdown(subject_id=1, target_seconds=300)
+        clock.advance(seconds=60)
+        service.heartbeat()
+
+        recovered_service = TimerService(conn, clock)
+        state = recovered_service.load_persisted_state()
+        assert state is not None
+        assert state.mode == "countdown"
+        assert state.countdown_target_seconds == 300
+
+        recovered_service.recover_as_paused(state)
+        assert recovered_service.is_paused
+        assert recovered_service.remaining_seconds == 240
+        session = recovered_service.recover_and_save(state)
+
+        assert session is not None
+        assert session.duration_secs == 60
+
+
 class TestCrashRecovery:
     def test_recovery_stops_at_last_heartbeat(self, conn):
         clock = FakeClock("2026-10-13T10:00:00Z")

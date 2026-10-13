@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -22,10 +23,15 @@ from study_tracker.core.formatting import format_duration
 from study_tracker.db import sessions_repo, settings_repo
 from study_tracker.domain.allocation import allocate_by_day
 from study_tracker.domain.day import day_bounds
-from study_tracker.services import calendar_service, task_service
+from study_tracker.services import (
+    calendar_service,
+    subject_daily_goal_service,
+    subject_service,
+    task_service,
+)
 from study_tracker.services.day_plan_service import exam_goal_progress, get_study_goal_seconds
 from study_tracker.services.records_service import get_personal_records
-from study_tracker.services.stats_service import dashboard_stats
+from study_tracker.services.stats_service import dashboard_stats, subject_time_for_range
 from study_tracker.ui.signals import AppSignals
 from study_tracker.ui.widgets.mpl_canvas import MplCanvas
 
@@ -48,9 +54,11 @@ class DashboardPage(QWidget):
         self._on_day_selected = on_day_selected
         self._range = QComboBox()
         self._tiles: dict[str, QLabel] = {}
+        self._tile_columns = 0
         self._build_ui()
         signals.sessions_changed.connect(self.refresh)
         signals.tasks_changed.connect(self.refresh)
+        signals.subjects_changed.connect(self.refresh)
         signals.settings_changed.connect(self.refresh)
         signals.calendar_changed.connect(self.refresh)
         signals.exam_changed.connect(self.refresh)
@@ -58,7 +66,17 @@ class DashboardPage(QWidget):
         self.refresh()
 
     def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
+        page_layout = QVBoxLayout(self)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        self._scroll_area = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        content = QWidget()
+        scroll.setWidget(content)
+        page_layout.addWidget(scroll)
+
+        root = QVBoxLayout(content)
         root.setContentsMargins(24, 24, 24, 24)
         header = QHBoxLayout()
         header.addWidget(QLabel("<h2>Dashboard</h2>"))
@@ -88,8 +106,14 @@ class DashboardPage(QWidget):
         root.addWidget(self._edit_plan_button)
         self._study_goal = QLabel()
         root.addWidget(self._study_goal)
+        self._subject_goals = QLabel()
+        self._subject_goals.setWordWrap(True)
+        root.addWidget(self._subject_goals)
 
         grid = QGridLayout()
+        grid.setHorizontalSpacing(10)
+        grid.setVerticalSpacing(10)
+        self._tile_grid = grid
         labels = (
             ("today", "Today"), ("week", "This week"), ("month", "This month"),
             ("average", "Daily average"), ("sessions", "Sessions in range"),
@@ -99,15 +123,17 @@ class DashboardPage(QWidget):
         for index, (key, title) in enumerate(labels):
             tile = QLabel()
             tile.setMinimumHeight(92)
+            tile.setWordWrap(True)
+            tile.setMinimumWidth(0)
             tile.setStyleSheet(
                 "background: #1F2A32; border: 1px solid #3A4F5F; border-radius: 10px; "
                 "padding: 12px; font-size: 11pt; color: #E6EDF3;"
             )
             tile.setTextFormat(Qt.TextFormat.RichText)
             self._tiles[key] = tile
-            grid.addWidget(tile, index // 4, index % 4)
             tile.setText(f"<span style='color:#52606D'>{title}</span><br><b>—</b>")
         root.addLayout(grid)
+        self._relayout_tiles()
         self._detail = QLabel()
         self._detail.setWordWrap(True)
         self._detail.setStyleSheet("color: #D9E4EE; padding-top: 12px;")
@@ -121,6 +147,23 @@ class DashboardPage(QWidget):
         )
         root.addWidget(self._daily_chart)
         root.addStretch()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._relayout_tiles()
+
+    def _relayout_tiles(self) -> None:
+        if not hasattr(self, "_tile_grid"):
+            return
+        width = self.width()
+        columns = 4 if width >= 1180 else 3 if width >= 820 else 2
+        if columns == self._tile_columns:
+            return
+        for tile in self._tiles.values():
+            self._tile_grid.removeWidget(tile)
+        for index, tile in enumerate(self._tiles.values()):
+            self._tile_grid.addWidget(tile, index // columns, index % columns)
+        self._tile_columns = columns
 
     def refresh(self) -> None:
         if not self._conn:
@@ -181,6 +224,18 @@ class DashboardPage(QWidget):
             if study_goal_seconds <= 0
             else f"Study target: {format_duration(data.today_secs)} of "
             f"{format_duration(study_goal_seconds)}"
+        )
+        subject_goals = subject_daily_goal_service.get_all_daily_goals_seconds(self._conn)
+        subject_seconds = subject_time_for_range(self._conn, start=today, end=today)
+        subject_progress = [
+            f"{subject.name}: {format_duration(subject_seconds.get(subject.id, 0))} of "
+            f"{format_duration(subject_goals[subject.id])}"
+            for subject in subject_service.get_active(self._conn)
+            if subject_goals.get(subject.id, 0) > 0
+        ]
+        self._subject_goals.setText(
+            "Subject targets today: "
+            + ("  |  ".join(subject_progress) if subject_progress else "none set")
         )
         values = {
             "today": format_duration(data.today_secs),
