@@ -200,6 +200,16 @@ def test_date_exam_goal_override_wins_without_rewriting_weekday_default(conn):
     assert day_plan_service.get_exam_goal(conn, "2026-10-20").goal_type == "count"
 
 
+def test_study_goal_date_override_wins_without_changing_weekday_default(conn):
+    day_plan_service.set_weekday_study_goal_seconds(conn, 1, 7200)
+    day_plan_service.set_study_goal_seconds(
+        conn, "2026-10-13", 3600, now_utc="2026-10-13T12:00:00Z"
+    )
+
+    assert day_plan_service.get_study_goal_seconds(conn, "2026-10-13") == 3600
+    assert day_plan_service.get_study_goal_seconds(conn, "2026-10-20") == 7200
+
+
 def test_deleting_linked_session_clears_exam_link_and_undo_restores_it(conn):
     exam = exam_service.create_exam(
         conn,

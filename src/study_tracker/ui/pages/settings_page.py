@@ -29,6 +29,7 @@ from study_tracker import __version__
 from study_tracker.core import paths
 from study_tracker.core.errors import AppError
 from study_tracker.db import exams_repo, settings_repo
+from study_tracker.services import day_plan_service
 from study_tracker.services.backup_service import backup_report, create_backup
 from study_tracker.services.export_service import (
     export_daily_by_subject,
@@ -98,6 +99,58 @@ class SettingsPage(QWidget):
         cutoff_row.addWidget(self._button("Apply cutoff", self._change_cutoff))
         cutoff_row.addStretch()
         form.addRow("Study day ends at:", cutoff_row)
+        self._baseline_alerts = QCheckBox("Enable baseline study-goal alerts")
+        self._baseline_alerts.setChecked(
+            settings_repo.get(self._conn, "baseline_alerts_enabled") != "0"
+        )
+        wake_minutes = int(settings_repo.get(self._conn, "wake_minutes") or "420")
+        self._wake_time = QTimeEdit(QTime(wake_minutes // 60, wake_minutes % 60))
+        self._wake_time.setDisplayFormat("HH:mm")
+        self._overhead = QSpinBox()
+        self._overhead.setRange(0, 100)
+        self._overhead.setSuffix(" %")
+        self._overhead.setValue(
+            int(settings_repo.get(self._conn, "break_overhead_percent") or "20")
+        )
+        margin_values = self._read_alert_margins()
+        self._alert_margins = []
+        margins_row = QHBoxLayout()
+        for label, value in zip(("Heads-up", "Warning", "Urgent"), margin_values):
+            margins_row.addWidget(QLabel(label))
+            margin = QSpinBox()
+            margin.setRange(0, 1440)
+            margin.setSuffix(" min")
+            margin.setValue(value)
+            self._alert_margins.append(margin)
+            margins_row.addWidget(margin)
+        self._alert_sound = QCheckBox("Play a sound for baseline alerts")
+        self._alert_sound.setChecked(settings_repo.get(self._conn, "alert_sound") == "1")
+        self._tray_minimize = QCheckBox("Keep running in the system tray after closing")
+        self._tray_minimize.setChecked(settings_repo.get(self._conn, "tray_minimize") != "0")
+        self._tray_minimize.setToolTip("Requires Windows system tray support.")
+        form.addRow("Baseline alerts:", self._baseline_alerts)
+        form.addRow("Wake time:", self._wake_time)
+        form.addRow("Break overhead:", self._overhead)
+        form.addRow("Alert margins:", margins_row)
+        form.addRow("", self._alert_sound)
+        form.addRow("", self._tray_minimize)
+        self._goal_weekday = QComboBox()
+        for weekday, label in enumerate(
+            ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+        ):
+            self._goal_weekday.addItem(label, weekday)
+        self._goal_minutes = QSpinBox()
+        self._goal_minutes.setRange(0, 1440)
+        self._goal_minutes.setSuffix(" min")
+        self._goal_weekday.currentIndexChanged.connect(self._load_weekday_goal)
+        goal_row = QHBoxLayout()
+        goal_row.addWidget(self._goal_weekday)
+        goal_row.addWidget(self._goal_minutes)
+        goal_row.addWidget(self._button("Save weekday goal", self._save_weekday_goal))
+        goal_row.addStretch()
+        form.addRow("Default study target:", goal_row)
+        self._load_weekday_goal()
+        form.addRow("", self._button("Apply alert settings", self._save_alert_settings))
         self._theme = QComboBox()
         self._theme.addItem("Light", "light")
         self._theme.addItem("Dark", "dark")
@@ -235,6 +288,57 @@ class SettingsPage(QWidget):
         settings_repo.set_value(self._conn, "backup_copies", str(value))
         self._signals.settings_changed.emit()
 
+    def _read_alert_margins(self) -> tuple[int, int, int]:
+        value = settings_repo.get(self._conn, "alert_margins_minutes") or "120,60,20"
+        try:
+            margins = tuple(int(part.strip()) for part in value.split(","))
+        except ValueError:
+            margins = ()
+        if len(margins) != 3 or not margins[0] >= margins[1] >= margins[2] >= 0:
+            return 120, 60, 20
+        return margins
+
+    def _load_weekday_goal(self) -> None:
+        weekday = self._goal_weekday.currentData()
+        if weekday is None:
+            return
+        row = self._conn.execute(
+            "SELECT study_goal_secs FROM weekday_defaults WHERE weekday = ?", (weekday,)
+        ).fetchone()
+        self._goal_minutes.setValue(int(row["study_goal_secs"] // 60) if row else 0)
+
+    def _save_weekday_goal(self) -> None:
+        try:
+            day_plan_service.set_weekday_study_goal_seconds(
+                self._conn,
+                int(self._goal_weekday.currentData()),
+                self._goal_minutes.value() * 60,
+            )
+        except AppError as exc:
+            warn(self, "Invalid study target", str(exc))
+            return
+        self._signals.settings_changed.emit()
+
+    def _save_alert_settings(self) -> None:
+        margins = tuple(spin.value() for spin in self._alert_margins)
+        if not margins[0] >= margins[1] >= margins[2]:
+            warn(self, "Invalid alert margins", "Margins must descend from heads-up to urgent.")
+            return
+        wake_time = self._wake_time.time()
+        settings_repo.set_many(
+            self._conn,
+            {
+                "baseline_alerts_enabled": str(int(self._baseline_alerts.isChecked())),
+                "wake_minutes": str(wake_time.hour() * 60 + wake_time.minute()),
+                "break_overhead_percent": str(self._overhead.value()),
+                "alert_margins_minutes": ",".join(str(value) for value in margins),
+                "alert_sound": str(int(self._alert_sound.isChecked())),
+                "tray_minimize": str(int(self._tray_minimize.isChecked())),
+            },
+        )
+        self._signals.settings_changed.emit()
+        alert(self, "Alert settings saved", "Baseline alert preferences were updated.")
+
     def _save_theme(self) -> None:
         settings_repo.set_value(self._conn, "theme", self._theme.currentData())
         self._signals.settings_changed.emit()
@@ -311,9 +415,7 @@ class SettingsPage(QWidget):
             return
         self._scoring_preset_name.setText(str(preset["name"]))
         self._scoring_correct.setText(_milli_to_text(int(preset["marks_per_correct_milli"])))
-        self._scoring_penalty.setText(
-            _milli_to_text(int(preset["penalty_per_incorrect_milli"]))
-        )
+        self._scoring_penalty.setText(_milli_to_text(int(preset["penalty_per_incorrect_milli"])))
         self._scoring_skipped.setText(_milli_to_text(int(preset["marks_per_skipped_milli"])))
 
     def _new_scoring_preset(self) -> None:
@@ -479,9 +581,7 @@ class SettingsPage(QWidget):
         self._signals.sessions_changed.emit()
         self._signals.day_changed.emit()
         self._signals.settings_changed.emit()
-        self._message.setText(
-            f"Updated {changed} timed session(s). Safety backup: {backup_path}"
-        )
+        self._message.setText(f"Updated {changed} timed session(s). Safety backup: {backup_path}")
 
     def _choose_directory(self, title: str) -> Path | None:
         chosen = QFileDialog.getExistingDirectory(self, title, str(paths.data_dir()))

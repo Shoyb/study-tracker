@@ -12,8 +12,9 @@ from study_tracker.db import pomodoro_repo, sessions_repo
 from study_tracker.db.connection import get_connection
 from study_tracker.db.exams_repo import ExamPart
 from study_tracker.db.migrate import run_migrations
-from study_tracker.services import exam_service, session_service, task_service
+from study_tracker.services import day_plan_service, exam_service, session_service, task_service
 from study_tracker.services.timer_service import TimerService
+from study_tracker.ui.dialogs.day_plan_dialog import DayPlanDialog
 from study_tracker.ui.dialogs.exam_dialog import ExamPartDialog
 from study_tracker.ui.dialogs.session_dialog import SessionDialog
 from study_tracker.ui.main_window import MainWindow
@@ -111,6 +112,28 @@ def test_main_window_opens_exams_page(qtbot, db_conn):
     window._navigate(3)
     assert window._stack.currentIndex() == 3
     assert hasattr(window, "_exams_page")
+
+
+def test_day_plan_dialog_saves_goals_and_rest_day(qtbot, db_conn):
+    clock = FakeClock("2026-10-13T12:00:00Z")
+    dialog = DayPlanDialog(db_conn, "2026-10-13", clock)
+    qtbot.addWidget(dialog)
+    dialog._study_minutes.setValue(240)
+    dialog._goal_type.setCurrentIndex(dialog._goal_type.findData("questions"))
+    dialog._goal_value.setValue(60)
+    dialog._save()
+
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert day_plan_service.get_study_goal_seconds(db_conn, "2026-10-13") == 14400
+    assert day_plan_service.get_exam_goal(db_conn, "2026-10-13").value == 60
+
+    rest_dialog = DayPlanDialog(db_conn, "2026-10-13", clock)
+    qtbot.addWidget(rest_dialog)
+    rest_dialog._rest_day.setChecked(True)
+    rest_dialog._save()
+    assert day_plan_service.is_rest_day(db_conn, "2026-10-13")
+    assert day_plan_service.get_study_goal_seconds(db_conn, "2026-10-13") == 0
+    assert day_plan_service.get_exam_goal(db_conn, "2026-10-13").goal_type == "none"
 
 
 def test_exam_part_autofills_skipped_count_from_total_and_attempts(qtbot, db_conn):

@@ -27,6 +27,7 @@ from study_tracker.core.formatting import format_duration
 from study_tracker.db import exams_repo, settings_repo, subjects_repo, tasks_repo
 from study_tracker.domain.exam_scoring import format_milli_marks, format_percentage
 from study_tracker.services.exam_stats_service import category_statistics
+from study_tracker.services.records_service import get_personal_records
 from study_tracker.services.stats_service import (
     completions_by_week,
     task_time_for_range,
@@ -128,6 +129,16 @@ class AnalyticsPage(QWidget):
         self._exam_statistics.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         exams_layout.addWidget(self._exam_statistics)
         tabs.addTab(exams_tab, "Exams")
+
+        records_tab = QWidget()
+        records_layout = QVBoxLayout(records_tab)
+        self._records_table = QTableWidget(0, 4)
+        self._records_table.setHorizontalHeaderLabels(
+            ["Record", "Best", "Date or period", "Details"]
+        )
+        self._records_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        records_layout.addWidget(self._records_table)
+        tabs.addTab(records_tab, "Records")
         root.addWidget(tabs)
 
     def _dates(self) -> tuple[str, str]:
@@ -155,9 +166,7 @@ class AnalyticsPage(QWidget):
             date_to=end,
         )
         cutoff_minutes = int(settings_repo.get(self._conn, "day_cutoff_minutes") or "180")
-        for subject_id, seconds in subject_totals(
-            sessions, start, end, cutoff_minutes
-        ).items():
+        for subject_id, seconds in subject_totals(sessions, start, end, cutoff_minutes).items():
             subject = subject_map.get(subject_id)
             if subject:
                 subject_values.append((subject.name, seconds, subject.colour))
@@ -183,6 +192,7 @@ class AnalyticsPage(QWidget):
         completions = completions_by_week(self._conn, start=start, end=end, week_start=week_start)
         self._completions.redraw(draw_completions, completions)
         self._refresh_exam_statistics()
+        self._refresh_records()
 
     def _refresh_exam_statistics(self) -> None:
         if not hasattr(self, "_exam_statistics"):
@@ -213,3 +223,20 @@ class AnalyticsPage(QWidget):
             for column, value in enumerate(values):
                 self._exam_statistics.setItem(index, column, QTableWidgetItem(value))
         self._exam_statistics.resizeColumnsToContents()
+
+    def _refresh_records(self) -> None:
+        rows = get_personal_records(self._conn)
+        self._records_table.setRowCount(len(rows))
+        for index, record in enumerate(rows):
+            if record.key.startswith("study_"):
+                value = format_duration(int(record.value))
+            elif record.key == "longest_streak":
+                value = f"{record.value} days"
+            elif record.key == "pomodoros_day":
+                value = f"{record.value} completed"
+            else:
+                value = format_percentage(record.value) or "—"
+            values = (record.title, value, record.period, record.detail)
+            for column, cell in enumerate(values):
+                self._records_table.setItem(index, column, QTableWidgetItem(cell))
+        self._records_table.resizeColumnsToContents()

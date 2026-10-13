@@ -5,6 +5,24 @@ from __future__ import annotations
 import sqlite3
 
 
+def get_alert(conn: sqlite3.Connection, local_date: str, alert_key: str) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM alert_log WHERE local_date = ? AND alert_key = ?",
+        (local_date, alert_key),
+    ).fetchone()
+
+
+def record_alert(
+    conn: sqlite3.Connection, *, local_date: str, alert_key: str, fired_at_utc: str
+) -> bool:
+    cursor = conn.execute(
+        "INSERT OR IGNORE INTO alert_log (local_date, alert_key, fired_at_utc) "
+        "VALUES (?, ?, ?)",
+        (local_date, alert_key, fired_at_utc),
+    )
+    return cursor.rowcount == 1
+
+
 def get_weekday_default(conn: sqlite3.Connection, weekday: int) -> sqlite3.Row | None:
     return conn.execute(
         "SELECT * FROM weekday_defaults WHERE weekday = ?", (weekday,)

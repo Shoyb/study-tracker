@@ -34,8 +34,10 @@ from study_tracker.core.clock import Clock
 from study_tracker.core.errors import DatabaseError
 from study_tracker.core.formatting import format_duration, format_duration_short
 from study_tracker.db import settings_repo, subjects_repo, tasks_repo
+from study_tracker.services.alert_service import AlertService
 from study_tracker.services.timer_service import TimerService
 from study_tracker.services.undo.journal import JournalService
+from study_tracker.ui.notifications import NotificationBanner
 from study_tracker.ui.pages.analytics_page import AnalyticsPage
 from study_tracker.ui.pages.calendar_page import CalendarPage
 from study_tracker.ui.pages.dashboard_page import DashboardPage
@@ -221,6 +223,7 @@ class MainWindow(QMainWindow):
         self._log_path = log_path
         self._timer_svc = TimerService(self._conn, self._clock) if self._conn is not None else None
         self._tray_icon: QSystemTrayIcon | None = None
+        self._exit_requested = False
 
         self.setWindowTitle("Study Tracker")
         self.setWindowIcon(QIcon(str(paths.icon_path())))
@@ -274,6 +277,7 @@ class MainWindow(QMainWindow):
             on_stop=self._on_timer_bar_stop,
             parent=right_col,
         )
+        self._notification_banner = NotificationBanner(right_col)
         self._edit_toolbar = QToolBar("Edit history", right_col)
         self._undo_action = self._edit_toolbar.addAction("Undo")
         self._redo_action = self._edit_toolbar.addAction("Redo")
@@ -282,6 +286,7 @@ class MainWindow(QMainWindow):
         self._redo_action.triggered.connect(self._redo)
         self._history_action.triggered.connect(self._show_undo_history)
         right_layout.addWidget(self._edit_toolbar)
+        right_layout.addWidget(self._notification_banner)
         right_layout.addWidget(self._timer_bar)
 
         self._stack = QStackedWidget(right_col)
@@ -447,6 +452,32 @@ class MainWindow(QMainWindow):
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
         self._heartbeat_timer.start()
 
+        self._alert_timer = QTimer(self)
+        self._alert_timer.setInterval(60000)
+        self._alert_timer.timeout.connect(self._check_baseline_alert)
+        self._alert_timer.start()
+        QTimer.singleShot(0, self._check_baseline_alert)
+        self._signals.day_changed.connect(self._check_baseline_alert)
+
+    def _check_baseline_alert(self) -> None:
+        if self._conn is None or not hasattr(self, "_notification_banner"):
+            return
+        try:
+            alert = AlertService(self._conn, self._clock).evaluate()
+        except Exception:
+            log.exception("Baseline alert evaluation failed.")
+            return
+        if alert is None:
+            return
+        self._notification_banner.notify(
+            "Study goal alert:",
+            alert.message,
+            alert.level,
+            tray=self._tray_icon,
+            sound=settings_repo.get(self._conn, "alert_sound") == "1",
+        )
+        self.show_status(alert.message, timeout_ms=10000)
+
     def _setup_tray_icon(self) -> None:
         if not QSystemTrayIcon.isSystemTrayAvailable():
             log.info("System tray is unavailable; minimize-to-tray is disabled.")
@@ -458,7 +489,7 @@ class MainWindow(QMainWindow):
         open_action = QAction("Open Study Tracker", self)
         open_action.triggered.connect(self._restore_from_tray)
         exit_action = QAction("Exit", self)
-        exit_action.triggered.connect(self.close)
+        exit_action.triggered.connect(self._exit_from_tray)
         menu.addAction(open_action)
         menu.addSeparator()
         menu.addAction(exit_action)
@@ -479,10 +510,21 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
 
+    def _exit_from_tray(self) -> None:
+        self._exit_requested = True
+        self.close()
+
+    def _tray_minimize_enabled(self) -> bool:
+        return (
+            self._conn is not None
+            and self._tray_icon is not None
+            and settings_repo.get(self._conn, "tray_minimize") != "0"
+        )
+
     def changeEvent(self, event: QEvent) -> None:  # noqa: N802
         super().changeEvent(event)
         if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
-            if self._tray_icon is not None:
+            if self._tray_minimize_enabled():
                 self._tray_icon.show()
                 QTimer.singleShot(0, self.hide)
 
@@ -574,6 +616,13 @@ class MainWindow(QMainWindow):
             self.show_status("Interrupted session discarded.")
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
+        if (
+            not self._exit_requested
+            and self._tray_minimize_enabled()
+        ):
+            self.hide()
+            event.ignore()
+            return
         if self._timer_svc and self._timer_svc.is_active:
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Timer Active")
@@ -595,12 +644,14 @@ class MainWindow(QMainWindow):
                     event.accept()
                 except Exception as exc:
                     warn(self, "Cannot stop timer", str(exc))
+                    self._exit_requested = False
                     event.ignore()
             elif clicked == pause_btn:
                 if not self._timer_svc.is_paused:
                     self._timer_svc.pause()
                 event.accept()
             else:
+                self._exit_requested = False
                 event.ignore()
         else:
             event.accept()

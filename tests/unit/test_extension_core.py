@@ -28,6 +28,7 @@ def test_pomodoro_uses_long_break_after_four_focus_cycles():
 
 def test_baseline_alert_levels():
     assert required_minutes_for_day(180, overhead_percent=20) == 216
+    assert required_minutes_for_day(1, overhead_percent=20) == 2
     assert alert_level(120, margins=(120, 60, 20)) == "headsup"
     assert alert_level(10, margins=(120, 60, 20)) == "urgent"
     assert alert_level(-5, margins=(120, 60, 20)) == "critical"

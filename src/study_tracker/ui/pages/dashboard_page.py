@@ -7,7 +7,15 @@ from collections.abc import Callable
 from datetime import date, timedelta
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from study_tracker.charts.daily_bar import draw_daily_bars
 from study_tracker.core.formatting import format_duration
@@ -15,7 +23,8 @@ from study_tracker.db import sessions_repo, settings_repo
 from study_tracker.domain.allocation import allocate_by_day
 from study_tracker.domain.day import day_bounds
 from study_tracker.services import calendar_service, task_service
-from study_tracker.services.day_plan_service import exam_goal_progress
+from study_tracker.services.day_plan_service import exam_goal_progress, get_study_goal_seconds
+from study_tracker.services.records_service import get_personal_records
 from study_tracker.services.stats_service import dashboard_stats
 from study_tracker.ui.signals import AppSignals
 from study_tracker.ui.widgets.mpl_canvas import MplCanvas
@@ -35,6 +44,7 @@ class DashboardPage(QWidget):
         super().__init__(parent)
         self._conn = conn
         self._clock = clock
+        self._signals = signals
         self._on_day_selected = on_day_selected
         self._range = QComboBox()
         self._tiles: dict[str, QLabel] = {}
@@ -73,6 +83,11 @@ class DashboardPage(QWidget):
         root.addWidget(self._today_agenda)
         self._exam_goal = QLabel()
         root.addWidget(self._exam_goal)
+        self._edit_plan_button = QPushButton("Edit today's plan")
+        self._edit_plan_button.clicked.connect(self._edit_today_plan)
+        root.addWidget(self._edit_plan_button)
+        self._study_goal = QLabel()
+        root.addWidget(self._study_goal)
 
         grid = QGridLayout()
         labels = (
@@ -97,6 +112,9 @@ class DashboardPage(QWidget):
         self._detail.setWordWrap(True)
         self._detail.setStyleSheet("color: #D9E4EE; padding-top: 12px;")
         root.addWidget(self._detail)
+        self._record_summary = QLabel()
+        self._record_summary.setWordWrap(True)
+        root.addWidget(self._record_summary)
         self._daily_chart = MplCanvas(height=2.8)
         self._daily_chart.setStyleSheet(
             "background: #1F2A32; border: 1px solid #3A4F5F; border-radius: 10px;"
@@ -157,6 +175,13 @@ class DashboardPage(QWidget):
         data = dashboard_stats(
             self._conn, today=self._clock.local_date(), range_days=int(self._range.currentData())
         )
+        study_goal_seconds = get_study_goal_seconds(self._conn, today)
+        self._study_goal.setText(
+            "Study target: disabled"
+            if study_goal_seconds <= 0
+            else f"Study target: {format_duration(data.today_secs)} of "
+            f"{format_duration(study_goal_seconds)}"
+        )
         values = {
             "today": format_duration(data.today_secs),
             "week": format_duration(data.week_secs),
@@ -186,6 +211,20 @@ class DashboardPage(QWidget):
             f"{data.open_tasks} task{'s' if data.open_tasks != 1 else ''} open in this period. "
             "See Analytics for subject and task comparisons."
         )
+        record_values = []
+        for record in get_personal_records(self._conn)[:4]:
+            if record.key.startswith("study_"):
+                value = format_duration(int(record.value))
+            elif record.key == "longest_streak":
+                value = f"{record.value} days"
+            elif record.key == "pomodoros_day":
+                value = f"{record.value} completed"
+            else:
+                value = f"{record.value:.1%}"
+            record_values.append(f"{record.title}: {value}")
+        self._record_summary.setText(
+            "Personal bests: " + (" · ".join(record_values) if record_values else "No records yet")
+        )
         axes, bars = self._daily_chart.redraw(
             draw_daily_bars, data.daily, self._clock.local_date()
         )
@@ -201,3 +240,12 @@ class DashboardPage(QWidget):
             labels,
             on_click=lambda index: self._on_day_selected and self._on_day_selected(dates[index]),
         )
+
+    def _edit_today_plan(self) -> None:
+        from study_tracker.ui.dialogs.day_plan_dialog import DayPlanDialog
+
+        today = self._clock.local_date()
+        dialog = DayPlanDialog(self._conn, today, self._clock, self)
+        if dialog.exec() == DayPlanDialog.DialogCode.Accepted:
+            self._signals.settings_changed.emit()
+            self._signals.exam_changed.emit()

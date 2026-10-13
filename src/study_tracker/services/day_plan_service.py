@@ -26,6 +26,87 @@ class ExamGoalProgress:
     completed: int
 
 
+def get_study_goal_seconds(conn: sqlite3.Connection, study_day: str) -> int:
+    day = date.fromisoformat(study_day)
+    plan = day_plans_repo.get_day_plan(conn, study_day)
+    if plan is not None and plan["study_goal_secs"] is not None:
+        return int(plan["study_goal_secs"])
+    default = day_plans_repo.get_weekday_default(conn, day.weekday())
+    return int(default["study_goal_secs"]) if default is not None else 0
+
+
+def set_study_goal_seconds(
+    conn: sqlite3.Connection, study_day: str, seconds: int, *, now_utc: str
+) -> None:
+    if not 0 <= seconds <= 86400:
+        raise ValidationError("Study goal must be between 0 and 24 hours.")
+    date.fromisoformat(study_day)
+    existing = day_plans_repo.get_day_plan(conn, study_day)
+    day_plans_repo.upsert_day_plan(
+        conn,
+        local_date=study_day,
+        study_goal_secs=seconds,
+        exam_goal_type=existing["exam_goal_type"] if existing else None,
+        exam_goal_value=existing["exam_goal_value"] if existing else None,
+        is_rest_day=bool(existing["is_rest_day"]) if existing else False,
+        notes=existing["notes"] if existing else "",
+        updated_at_utc=now_utc,
+    )
+
+
+def is_rest_day(conn: sqlite3.Connection, study_day: str) -> bool:
+    plan = day_plans_repo.get_day_plan(conn, study_day)
+    return bool(plan["is_rest_day"]) if plan is not None else False
+
+
+def save_day_plan(
+    conn: sqlite3.Connection,
+    study_day: str,
+    *,
+    study_goal_secs: int,
+    exam_goal_type: str,
+    exam_goal_value: int,
+    is_rest_day: bool,
+    now_utc: str,
+) -> None:
+    date.fromisoformat(study_day)
+    if not 0 <= study_goal_secs <= 86400:
+        raise ValidationError("Study goal must be between 0 and 24 hours.")
+    _validate_goal(exam_goal_type, exam_goal_value)
+    if is_rest_day:
+        study_goal_secs = 0
+        exam_goal_type = "none"
+        exam_goal_value = 0
+    existing = day_plans_repo.get_day_plan(conn, study_day)
+    day_plans_repo.upsert_day_plan(
+        conn,
+        local_date=study_day,
+        study_goal_secs=study_goal_secs,
+        exam_goal_type=exam_goal_type,
+        exam_goal_value=exam_goal_value,
+        is_rest_day=is_rest_day,
+        notes=existing["notes"] if existing else "",
+        updated_at_utc=now_utc,
+    )
+
+
+def set_weekday_study_goal_seconds(
+    conn: sqlite3.Connection, weekday: int, seconds: int
+) -> None:
+    if not 0 <= weekday <= 6:
+        raise ValidationError("Weekday must be between 0 (Monday) and 6 (Sunday).")
+    if not 0 <= seconds <= 86400:
+        raise ValidationError("Study goal must be between 0 and 24 hours.")
+    current = day_plans_repo.get_weekday_default(conn, weekday)
+    day_plans_repo.upsert_weekday_default(
+        conn,
+        weekday=weekday,
+        study_goal_secs=seconds,
+        exam_goal_type=current["exam_goal_type"] if current else "count",
+        exam_goal_value=current["exam_goal_value"] if current else 1,
+    )
+
+
 def get_exam_goal(conn: sqlite3.Connection, study_day: str) -> ExamGoal:
     day = date.fromisoformat(study_day)
     plan = day_plans_repo.get_day_plan(conn, study_day)
