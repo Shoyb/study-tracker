@@ -23,16 +23,16 @@ def conn(db_path):
 
 
 class TestMigrations:
-    def test_fresh_database_has_version_1(self, conn, db_path):
+    def test_fresh_database_has_current_version(self, conn, db_path):
         run_migrations(conn, db_path)
         version = conn.execute("PRAGMA user_version;").fetchone()[0]
-        assert version == 1
+        assert version == 2
 
     def test_second_start_does_not_change_version(self, conn, db_path):
         run_migrations(conn, db_path)
         run_migrations(conn, db_path)  # should be a no-op
         version = conn.execute("PRAGMA user_version;").fetchone()[0]
-        assert version == 1
+        assert version == 2
 
     def test_all_tables_exist(self, conn, db_path):
         run_migrations(conn, db_path)

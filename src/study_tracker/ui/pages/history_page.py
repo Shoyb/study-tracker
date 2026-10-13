@@ -172,6 +172,15 @@ class HistoryPage(QWidget):
         footer.addWidget(self._del_btn)
         root.addLayout(footer)
 
+    def show_date(self, local_date: str) -> None:
+        """Show one calendar day; used by chart and calendar click-through."""
+        value = QDate.fromString(local_date, "yyyy-MM-dd")
+        self._date_from.setDate(value)
+        self._date_to.setDate(value)
+        self._date_from_chk.setChecked(True)
+        self._date_to_chk.setChecked(True)
+        self._apply_filters()
+
         self._populate_filter_combos()
 
     def _populate_filter_combos(self) -> None:

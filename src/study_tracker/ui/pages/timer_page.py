@@ -66,8 +66,8 @@ class TimerPage(QWidget):
         # 1. Stopwatch Card
         card = QFrame()
         card.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E0E0E0; "
-            "border-radius: 8px; padding: 20px; }"
+            "QFrame { background-color: #1F2A32; border: 1px solid #3A4F5F; "
+            "border-radius: 12px; padding: 20px; }"
         )
         card_layout = QVBoxLayout(card)
         card_layout.setSpacing(14)
@@ -77,7 +77,7 @@ class TimerPage(QWidget):
         self._display = QLabel("00:00:00")
         self._display.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._display.setStyleSheet(
-            "font-size: 52pt; font-weight: bold; color: #1565C0; "
+            "font-size: 52pt; font-weight: bold; color: #8AC7FF; "
             "font-family: 'Consolas', monospace;"
         )
         card_layout.addWidget(self._display)
@@ -85,7 +85,7 @@ class TimerPage(QWidget):
         # Status text
         self._status_label = QLabel("Idle")
         self._status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._status_label.setStyleSheet("font-size: 11pt; color: #757575; font-weight: 500;")
+        self._status_label.setStyleSheet("font-size: 11pt; color: #C4D3E1; font-weight: 500;")
         card_layout.addWidget(self._status_label)
 
         # Subject & Task Pickers
@@ -156,13 +156,17 @@ class TimerPage(QWidget):
         today_header = QHBoxLayout()
         self._today_title = QLabel("<h3>Today's Study Sessions</h3>")
         self._today_total_label = QLabel("<b>Today's total: 0 min</b>")
-        self._today_total_label.setStyleSheet("color: #1976D2; font-size: 11pt;")
+        self._today_total_label.setStyleSheet("color: #8AC7FF; font-size: 11pt;")
         today_header.addWidget(self._today_title)
         today_header.addStretch()
         today_header.addWidget(self._today_total_label)
         root.addLayout(today_header)
 
         self._today_table = QTableWidget()
+        self._today_table.setStyleSheet(
+            "background: #1F2A32; color: #E6EDF3; border: 1px solid #3A4F5F; "
+            "selection-background-color: #175987; selection-color: #FFFFFF;"
+        )
         self._today_table.setColumnCount(5)
         self._today_table.setHorizontalHeaderLabels([
             "Time", "Duration", "Subject", "Task", "Notes"
@@ -243,12 +247,12 @@ class TimerPage(QWidget):
             self._pause_btn.setText("▶  Resume" if paused else "⏸  Pause")
             self._status_label.setText("Paused" if paused else "Running…")
             self._status_label.setStyleSheet(
-                "font-size: 11pt; color: #F57C00;" if paused else "font-size: 11pt; color: #388E3C;"
+                "font-size: 11pt; color: #FFB870;" if paused else "font-size: 11pt; color: #7FE3A2;"
             )
         else:
             self._pause_btn.setText("⏸  Pause")
             self._status_label.setText("Idle")
-            self._status_label.setStyleSheet("font-size: 11pt; color: #757575;")
+            self._status_label.setStyleSheet("font-size: 11pt; color: #C4D3E1;")
             self._display.setText("00:00:00")
 
     def _on_tick(self) -> None:

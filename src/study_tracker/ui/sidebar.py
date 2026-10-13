@@ -32,6 +32,8 @@ class Sidebar(QListWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         self.setObjectName("Sidebar")
         self.setSpacing(2)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         for icon, label in self._ITEMS:
             item = QListWidgetItem(f"  {icon}  {label}")

@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import sqlite3
+import tempfile
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -19,6 +22,18 @@ from study_tracker.core.errors import DatabaseError
 log = logging.getLogger(__name__)
 
 _STAMP_FMT = "%Y%m%d_%H%M%S_%f"
+
+
+@dataclass(frozen=True)
+class BackupReport:
+    """Validation outcome and counts displayed before a restore."""
+
+    ok: bool
+    message: str
+    user_version: int = 0
+    subjects: int = 0
+    tasks: int = 0
+    sessions: int = 0
 
 
 def _timestamp() -> str:
@@ -52,20 +67,49 @@ def validate_backup(backup_path: Path) -> bool:
 
     Returns ``True`` if the file is a healthy SQLite database.
     """
+    return backup_report(backup_path).ok
+
+
+def backup_report(backup_path: Path) -> BackupReport:
+    """Validate schema, integrity and foreign keys and return useful row counts."""
     if not backup_path.exists():
-        log.warning("Validate: file does not exist: %s", backup_path)
-        return False
+        return BackupReport(False, f"Backup file does not exist: {backup_path}")
     try:
         conn = sqlite3.connect(str(backup_path))
-        row = conn.execute("PRAGMA quick_check;").fetchone()
+        integrity = conn.execute("PRAGMA integrity_check;").fetchone()
+        foreign_keys = conn.execute("PRAGMA foreign_key_check;").fetchall()
+        version = conn.execute("PRAGMA user_version;").fetchone()[0]
+        tables = {
+            row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        required = {"subjects", "tasks", "sessions", "meta"}
+        counts = {
+            table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in required
+        }
         conn.close()
-        ok = row is not None and row[0] == "ok"
-        if not ok:
-            log.warning("Validate: quick_check failed for %s: %s", backup_path, row)
-        return ok
+        if integrity is None or integrity[0] != "ok":
+            return BackupReport(False, "SQLite integrity check failed.")
+        if foreign_keys:
+            return BackupReport(False, "Backup contains foreign-key violations.")
+        if not required.issubset(tables):
+            return BackupReport(False, "Backup is missing required Study Tracker tables.")
+        from study_tracker.db.migrate import latest_known_version
+
+        if version > latest_known_version():
+            return BackupReport(
+                False, "Backup was made by a newer version of Study Tracker.", version
+            )
+        return BackupReport(
+            True,
+            "Backup is healthy.",
+            version,
+            counts["subjects"],
+            counts["tasks"],
+            counts["sessions"],
+        )
     except Exception as exc:
         log.warning("Validate: could not open %s: %s", backup_path, exc)
-        return False
+        return BackupReport(False, f"Could not open backup: {exc}")
 
 
 def file_hash(path: Path) -> str:
@@ -108,8 +152,9 @@ def restore_backup(backup_path: Path, db_path: Path) -> None:
     The caller must close the application's normal connection *before*
     calling this function, and reopen it afterwards.
     """
-    if not validate_backup(backup_path):
-        raise DatabaseError(f"Backup file is corrupt or missing: {backup_path}")
+    report = backup_report(backup_path)
+    if not report.ok:
+        raise DatabaseError(report.message)
 
     # Remove stale side files that would confuse SQLite after the swap.
     for suffix in ("-wal", "-shm"):
@@ -120,7 +165,14 @@ def restore_backup(backup_path: Path, db_path: Path) -> None:
             except OSError as exc:
                 log.warning("Could not remove %s: %s", side, exc)
 
-    # Copy (not rename) so the backup remains intact.
-    import shutil
-    shutil.copy2(str(backup_path), str(db_path))
+    # Copy to a file in the target directory, then swap atomically. The
+    # original backup remains untouched if the operation fails.
+    descriptor, temporary = tempfile.mkstemp(prefix=".restore_", suffix=".db", dir=db_path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as target, backup_path.open("rb") as source:
+            target.write(source.read())
+        os.replace(temporary, db_path)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
     log.info("Restored %s -> %s", backup_path.name, db_path)

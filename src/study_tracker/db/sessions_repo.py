@@ -22,9 +22,10 @@ class Session:
     session_type: str
     notes: str
     utc_offset_mins: int
-    source: str | None
-    source_id: str | None
     created_at: str
+    source: str | None = None
+    source_id: str | None = None
+    updated_at: str | None = None
 
 
 def _row_to_session(row: sqlite3.Row) -> Session:
@@ -87,6 +88,15 @@ def get_by_id(conn: sqlite3.Connection, session_id: int) -> Session | None:
 
 def get_by_uuid(conn: sqlite3.Connection, uuid: str) -> Session | None:
     row = conn.execute("SELECT * FROM sessions WHERE uuid = ?", (uuid,)).fetchone()
+    return _row_to_session(row) if row else None
+
+
+def get_by_source_id(
+    conn: sqlite3.Connection, source: str, source_id: str
+) -> Session | None:
+    row = conn.execute(
+        "SELECT * FROM sessions WHERE source = ? AND source_id = ?", (source, source_id)
+    ).fetchone()
     return _row_to_session(row) if row else None
 
 

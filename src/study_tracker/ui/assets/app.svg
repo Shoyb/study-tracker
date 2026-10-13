@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="navy" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#294664"/>
+      <stop offset="1" stop-color="#172D46"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3988ED"/>
+      <stop offset="1" stop-color="#1762C5"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="44" fill="#FFFFFF"/>
+  <path d="M84 62V48m87 14V48" fill="none" stroke="url(#navy)" stroke-width="15" stroke-linecap="round"/>
+  <path d="M67 77h121a20 20 0 0 1 20 20v54m-34 42H67a20 20 0 0 1-20-20V97a20 20 0 0 1 20-20Z"
+        fill="none" stroke="url(#navy)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="m65 108 9 9 17-18m-26 44 9 9 17-18m-17 47 9 9 17-18"
+        fill="none" stroke="#55B887" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M108 110h46m-46 43h46m-46 43h20" fill="none" stroke="url(#navy)" stroke-width="9" stroke-linecap="round"/>
+  <circle cx="171" cy="174" r="38" fill="#FFFFFF" stroke="url(#blue)" stroke-width="12"/>
+  <path d="M171 157v19h19" fill="none" stroke="url(#navy)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

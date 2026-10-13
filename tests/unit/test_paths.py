@@ -57,3 +57,11 @@ def test_no_relative_paths(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPat
     importlib.reload(p)
     for fn in (p.data_dir, p.db_path, p.log_path, p.backup_dir, p.lock_path):
         assert fn().is_absolute(), f"{fn.__name__}() returned a relative path"
+
+
+def test_bundled_theme_and_icon_resources_exist() -> None:
+    import study_tracker.core.paths as p
+
+    assert (p.theme_dir() / "light.qss").is_file()
+    assert (p.theme_dir() / "dark.qss").is_file()
+    assert p.icon_path().is_file()

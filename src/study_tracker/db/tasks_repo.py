@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import uuid as uuid_module
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -14,8 +15,8 @@ class Task:
     id: int
     subject_id: int
     title: str
-    status: str          # 'todo' | 'in_progress' | 'done'
-    priority: str        # 'low' | 'medium' | 'high'
+    status: str  # 'todo' | 'in_progress' | 'done'
+    priority: str  # 'low' | 'medium' | 'high'
     archived: bool
     due_date: str | None
     estimate_secs: int | None
@@ -24,11 +25,14 @@ class Task:
     created_at: str
     # Computed by JOIN – not a real column:
     time_spent_secs: int = 0
+    session_count: int = 0
+    uuid: str | None = None
 
 
 def _row_to_task(row: sqlite3.Row) -> Task:
     return Task(
         id=row["id"],
+        uuid=row["uuid"] if "uuid" in row.keys() else None,
         subject_id=row["subject_id"],
         title=row["title"],
         status=row["status"],
@@ -70,6 +74,14 @@ def get_all(
     return [_row_to_task(r) for r in conn.execute(sql, params).fetchall()]
 
 
+def ensure_uuids(conn: sqlite3.Connection) -> None:
+    """Backfill stable identifiers for tasks created before migration 002."""
+    for row in conn.execute("SELECT id FROM tasks WHERE uuid IS NULL").fetchall():
+        conn.execute(
+            "UPDATE tasks SET uuid = ? WHERE id = ?", (str(uuid_module.uuid4()), row["id"])
+        )
+
+
 def get_by_id(conn: sqlite3.Connection, task_id: int) -> Task | None:
     sql = """
         SELECT t.*,
@@ -83,6 +95,12 @@ def get_by_id(conn: sqlite3.Connection, task_id: int) -> Task | None:
     return _row_to_task(row) if row else None
 
 
+def get_by_uuid(conn: sqlite3.Connection, task_uuid: str) -> Task | None:
+    """Return a task by its stable CSV identity."""
+    row = conn.execute("SELECT * FROM tasks WHERE uuid = ?", (task_uuid,)).fetchone()
+    return _row_to_task(row) if row else None
+
+
 def insert(
     conn: sqlite3.Connection,
     *,
@@ -93,16 +111,28 @@ def insert(
     due_date: str | None = None,
     estimate_secs: int | None = None,
     notes: str = "",
-    completed_at: str | None = None,
     created_at: str,
+    completed_at: str | None = None,
+    uuid: str | None = None,
 ) -> int:
+    uuid = uuid or str(uuid_module.uuid4())
     cur = conn.execute(
         """INSERT INTO tasks
-           (subject_id, title, status, priority, due_date,
+           (uuid, subject_id, title, status, priority, due_date,
             estimate_secs, notes, completed_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (subject_id, title, status, priority, due_date,
-         estimate_secs, notes, completed_at, created_at),
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            uuid,
+            subject_id,
+            title,
+            status,
+            priority,
+            due_date,
+            estimate_secs,
+            notes,
+            completed_at,
+            created_at,
+        ),
     )
     return cur.lastrowid  # type: ignore[return-value]
 
@@ -125,8 +155,18 @@ def update(
         """UPDATE tasks SET subject_id=?, title=?, status=?, priority=?,
            archived=?, due_date=?, estimate_secs=?, notes=?, completed_at=?
            WHERE id=?""",
-        (subject_id, title, status, priority, int(archived),
-         due_date, estimate_secs, notes, completed_at, task_id),
+        (
+            subject_id,
+            title,
+            status,
+            priority,
+            int(archived),
+            due_date,
+            estimate_secs,
+            notes,
+            completed_at,
+            task_id,
+        ),
     )
 
 
@@ -135,7 +175,5 @@ def delete(conn: sqlite3.Connection, task_id: int) -> None:
 
 
 def has_sessions(conn: sqlite3.Connection, task_id: int) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sessions WHERE task_id = ? LIMIT 1", (task_id,)
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM sessions WHERE task_id = ? LIMIT 1", (task_id,)).fetchone()
     return row is not None

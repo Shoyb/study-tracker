@@ -1,18 +1,139 @@
-"""Task analytics and ordering rules.
+"""Statistics and task ordering rules.
 
 Pure functions – no Qt, no SQL.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Iterable
+from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
+from study_tracker.domain.allocation import allocate_by_day
+
 if TYPE_CHECKING:
+    from study_tracker.db.sessions_repo import Session
     from study_tracker.db.tasks_repo import Task
 
 _PRIORITY_ORDER = {"high": 0, "medium": 1, "low": 2}
 _STATUS_ORDER = {"in_progress": 0, "todo": 1, "done": 2}
+
+
+def _dates_in_range(start: str, end: str) -> Iterable[str]:
+    """Yield every ISO calendar date in the inclusive range."""
+    start_date = date.fromisoformat(start)
+    end_date = date.fromisoformat(end)
+    while start_date <= end_date:
+        yield start_date.isoformat()
+        start_date += timedelta(days=1)
+
+
+def daily_totals(sessions: Iterable[Session], start: str, end: str) -> dict[str, int]:
+    """Return allocated study seconds for every day in an inclusive range.
+
+    ``allocate_by_day`` is intentionally the only place where a session is
+    split at midnight.  Keeping that rule here makes the Dashboard, Calendar,
+    and later charts agree exactly.
+    """
+    totals = {day: 0 for day in _dates_in_range(start, end)}
+    for session in sessions:
+        for day, seconds in allocate_by_day(session).items():
+            if day in totals:
+                totals[day] += seconds
+    return totals
+
+
+def daily_average(totals: dict[str, int], first_recorded_date: str | None = None) -> float:
+    """Return the average including zero days, but never before study began."""
+    if not totals:
+        return 0.0
+    dates = sorted(totals)
+    if first_recorded_date:
+        dates = [day for day in dates if day >= first_recorded_date]
+    if not dates:
+        return 0.0
+    return sum(totals[day] for day in dates) / len(dates)
+
+
+def weekly_totals(totals: dict[str, int], week_start: str = "monday") -> dict[str, int]:
+    """Group daily totals by the configured first day of the week."""
+    starts = {"monday": 0, "saturday": 5}
+    if week_start not in starts:
+        raise ValueError("week_start must be 'monday' or 'saturday'")
+    result: dict[str, int] = {}
+    for day, seconds in totals.items():
+        current = date.fromisoformat(day)
+        week_day = current - timedelta(days=(current.weekday() - starts[week_start]) % 7)
+        key = week_day.isoformat()
+        result[key] = result.get(key, 0) + seconds
+    return dict(sorted(result.items()))
+
+
+def current_streak(totals: dict[str, int], *, today: str, threshold_secs: int) -> int:
+    """Count qualifying consecutive days, without letting unfinished today break it."""
+    day = date.fromisoformat(today)
+    if totals.get(today, 0) < threshold_secs:
+        day -= timedelta(days=1)
+    streak = 0
+    while totals.get(day.isoformat(), 0) >= threshold_secs:
+        streak += 1
+        day -= timedelta(days=1)
+    return streak
+
+
+def longest_streak(totals: dict[str, int], *, threshold_secs: int) -> int:
+    """Return the longest run of qualifying calendar days."""
+    longest = current = 0
+    for day in sorted(totals):
+        if totals[day] >= threshold_secs:
+            current += 1
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest
+
+
+def _allocation_overlaps_range(allocation: dict[str, int], start: str, end: str) -> bool:
+    return any(start <= day <= end and seconds > 0 for day, seconds in allocation.items())
+
+
+def session_count(sessions: Iterable[Session], start: str, end: str) -> int:
+    """Count a session once when any allocated second falls in the range."""
+    return sum(
+        _allocation_overlaps_range(allocate_by_day(session), start, end)
+        for session in sessions
+    )
+
+
+def subject_totals(sessions: Iterable[Session], start: str, end: str) -> dict[int, int]:
+    """Return allocated time per subject for an inclusive date range."""
+    result: dict[int, int] = {}
+    for session in sessions:
+        seconds = sum(
+            value
+            for day, value in allocate_by_day(session).items()
+            if start <= day <= end
+        )
+        if seconds:
+            result[session.subject_id] = result.get(session.subject_id, 0) + seconds
+    return result
+
+
+def task_completion_rate(
+    tasks: Iterable[Task], start: str, end: str
+) -> tuple[int, int, float | None]:
+    """Return completed count, open-in-period count, and completion percentage."""
+    completed = 0
+    open_count = 0
+    for task in tasks:
+        created_day = task.created_at[:10]
+        completed_day = task.completed_at[:10] if task.completed_at else None
+        if start <= (completed_day or "") <= end:
+            completed += 1
+        if created_day <= end and (completed_day is None or completed_day >= start):
+            open_count += 1
+    percentage = (completed * 100 / open_count) if open_count else None
+    return completed, open_count, percentage
 
 
 def is_overdue(task: Task, today: str) -> bool:

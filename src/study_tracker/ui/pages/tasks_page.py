@@ -64,17 +64,19 @@ class TasksPage(QWidget):
         # 1. Header & Next Up Summary Strip
         self._next_up_panel = QFrame()
         self._next_up_panel.setStyleSheet(
-            "QFrame { background-color: #FFFFFF; border: 1px solid #E0E0E0; "
-            "border-radius: 6px; padding: 10px; }"
+            "QFrame { background-color: #1F2A32; border: 1px solid #3A4F5F; "
+            "border-radius: 10px; padding: 10px; }"
         )
         next_up_layout = QVBoxLayout(self._next_up_panel)
         next_up_layout.setContentsMargins(8, 8, 8, 8)
 
         self._next_up_title = QLabel("<b>Next Up</b>")
+        self._next_up_title.setStyleSheet("color: #F3F8FF;")
         self._next_up_content = QLabel("Loading…")
         self._next_up_content.setWordWrap(True)
+        self._next_up_content.setStyleSheet("color: #E6EDF3;")
         self._work_rem_label = QLabel()
-        self._work_rem_label.setStyleSheet("color: #757575; font-size: 9pt;")
+        self._work_rem_label.setStyleSheet("color: #C7D5E3; font-size: 9pt;")
 
         next_up_layout.addWidget(self._next_up_title)
         next_up_layout.addWidget(self._next_up_content)
@@ -151,6 +153,10 @@ class TasksPage(QWidget):
 
         # 4. Tasks Table
         self._table = QTableWidget()
+        self._table.setStyleSheet(
+            "background: #1F2A32; color: #E6EDF3; border: 1px solid #3A4F5F; "
+            "selection-background-color: #175987; selection-color: #FFFFFF;"
+        )
         self._table.setColumnCount(7)
         self._table.setHorizontalHeaderLabels([
             "Status", "Title", "Subject", "Priority", "Due Date", "Progress", "Actions"

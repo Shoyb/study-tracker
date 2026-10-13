@@ -11,6 +11,7 @@ from study_tracker.core.errors import ConflictError, ValidationError
 from study_tracker.db import sessions_repo, subjects_repo, tasks_repo, timer_state_repo
 from study_tracker.db.sessions_repo import Session
 from study_tracker.db.timer_state_repo import TimerState
+from study_tracker.domain.validation import validate_duration_secs
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class TimerService:
         self._accumulated_secs = 0
         self._segment_start_mono = mono_now
         self._last_tick_mono = mono_now
-        self._last_tick_wall = datetime.now(UTC).timestamp()
+        self._last_tick_wall = self._wall_timestamp()
 
         self._persist()
         log.info("Timer started for subject %d.", subject_id)
@@ -135,7 +136,7 @@ class TimerService:
         self._is_paused = False
         self._segment_start_mono = mono_now
         self._last_tick_mono = mono_now
-        self._last_tick_wall = datetime.now(UTC).timestamp()
+        self._last_tick_wall = self._wall_timestamp()
         self._last_heartbeat = self._clock.now_utc()
 
         self._persist()
@@ -158,16 +159,24 @@ class TimerService:
 
         mono_now = self._clock.monotonic()
         mono_gap = mono_now - self._last_tick_mono
+        wall_now = self._wall_timestamp()
+        wall_gap = wall_now - self._last_tick_wall
 
-        self._last_tick_mono = mono_now
-        self._last_tick_wall = datetime.now(UTC).timestamp()
-
-        if mono_gap > 10.0:
-            gap_secs = int(mono_gap)
-            self.pause()
+        if max(mono_gap, wall_gap) > 10.0:
+            # Bank time only to the last redraw. The interval after it is an
+            # unknown sleep/freeze gap and must never be silently counted.
+            self._accumulated_secs += max(0, int(self._last_tick_mono - self._segment_start_mono))
+            self._is_paused = True
+            self._last_heartbeat = self._clock.now_utc()
+            self._last_tick_mono = mono_now
+            self._last_tick_wall = wall_now
+            self._persist()
+            gap_secs = int(max(mono_gap, wall_gap))
             log.warning("Detected inactivity gap of %d seconds. Timer auto-paused.", gap_secs)
             return gap_secs
 
+        self._last_tick_mono = mono_now
+        self._last_tick_wall = wall_now
         return None
 
     def stop(self, utc_offset_mins: int = 0) -> Session:
@@ -178,6 +187,7 @@ class TimerService:
         duration = self.elapsed_seconds()
         if duration <= 0:
             duration = 1  # Minimum 1 second for database constraint
+        validate_duration_secs(duration)
 
         now_utc = self._clock.now_utc()
         start_utc = self._start_utc
@@ -266,6 +276,11 @@ class TimerService:
         self._last_heartbeat = ""
         self._accumulated_secs = 0
         self._segment_start_mono = 0.0
+
+    def _wall_timestamp(self) -> float:
+        """Read wall time from the injected clock, never from the system directly."""
+        value = datetime.strptime(self._clock.now_utc(), "%Y-%m-%dT%H:%M:%SZ")
+        return value.replace(tzinfo=UTC).timestamp()
 
     def _persist(self) -> None:
         state = TimerState(

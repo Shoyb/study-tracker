@@ -5,26 +5,35 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections.abc import Callable
+from pathlib import Path
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStackedWidget,
     QStatusBar,
+    QSystemTrayIcon,
     QVBoxLayout,
     QWidget,
 )
 
+from study_tracker.core import paths
 from study_tracker.core.clock import Clock
+from study_tracker.core.errors import DatabaseError
 from study_tracker.core.formatting import format_duration, format_duration_short
 from study_tracker.db import subjects_repo, tasks_repo
 from study_tracker.services.timer_service import TimerService
+from study_tracker.ui.pages.analytics_page import AnalyticsPage
+from study_tracker.ui.pages.calendar_page import CalendarPage
+from study_tracker.ui.pages.dashboard_page import DashboardPage
 from study_tracker.ui.pages.history_page import HistoryPage
+from study_tracker.ui.pages.settings_page import SettingsPage
 from study_tracker.ui.pages.subjects_page import SubjectsPage
 from study_tracker.ui.pages.tasks_page import TasksPage
 from study_tracker.ui.pages.timer_page import TimerPage
@@ -182,20 +191,27 @@ class MainWindow(QMainWindow):
         signals: AppSignals,
         conn: sqlite3.Connection | None = None,
         clock: Clock | None = None,
+        on_restore: Callable[[Path], None] | None = None,
+        database_path: Path | None = None,
+        log_path: Path | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._signals = signals
         self._conn = conn
         self._clock = clock or Clock()
-        self._timer_svc = (
-            TimerService(self._conn, self._clock) if self._conn is not None else None
-        )
+        self._on_restore = on_restore
+        self._database_path = database_path
+        self._log_path = log_path
+        self._timer_svc = TimerService(self._conn, self._clock) if self._conn is not None else None
+        self._tray_icon: QSystemTrayIcon | None = None
 
         self.setWindowTitle("Study Tracker")
+        self.setWindowIcon(QIcon(str(paths.icon_path())))
         self.setMinimumSize(QSize(900, 600))
         self.resize(1100, 700)
         self._build_ui()
+        self._setup_tray_icon()
         self._setup_shortcuts()
         self._setup_timers()
 
@@ -239,7 +255,15 @@ class MainWindow(QMainWindow):
 
         self._stack = QStackedWidget(right_col)
         for name in self._PAGE_NAMES:
-            if name == "Timer" and self._conn is not None and self._timer_svc is not None:
+            if name == "Dashboard" and self._conn is not None:
+                self._dashboard_page = DashboardPage(
+                    self._conn,
+                    self._signals,
+                    self._clock,
+                    on_day_selected=self._show_history_date,
+                )
+                self._stack.addWidget(self._dashboard_page)
+            elif name == "Timer" and self._conn is not None and self._timer_svc is not None:
                 self._timer_page = TimerPage(
                     self._conn, self._timer_svc, self._signals, self._clock
                 )
@@ -253,6 +277,22 @@ class MainWindow(QMainWindow):
             elif name == "History" and self._conn is not None:
                 self._history_page = HistoryPage(self._conn, self._signals, self._clock)
                 self._stack.addWidget(self._history_page)
+            elif name == "Calendar" and self._conn is not None:
+                self._calendar_page = CalendarPage(self._conn, self._signals, self._clock)
+                self._stack.addWidget(self._calendar_page)
+            elif name == "Analytics" and self._conn is not None:
+                self._analytics_page = AnalyticsPage(self._conn, self._signals, self._clock)
+                self._stack.addWidget(self._analytics_page)
+            elif name == "Settings" and self._conn is not None:
+                self._settings_page = SettingsPage(
+                    self._conn,
+                    self._signals,
+                    self._clock,
+                    on_restore=self._restore_from_settings,
+                    database_path=self._database_path,
+                    log_path=self._log_path,
+                )
+                self._stack.addWidget(self._settings_page)
             else:
                 self._stack.addWidget(PlaceholderPage(name))
         right_layout.addWidget(self._stack)
@@ -280,6 +320,45 @@ class MainWindow(QMainWindow):
         self._heartbeat_timer.setInterval(15000)
         self._heartbeat_timer.timeout.connect(self._on_heartbeat)
         self._heartbeat_timer.start()
+
+    def _setup_tray_icon(self) -> None:
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            log.info("System tray is unavailable; minimize-to-tray is disabled.")
+            return
+
+        tray = QSystemTrayIcon(QIcon(str(paths.icon_path())), self)
+        tray.setToolTip("Study Tracker")
+        menu = QMenu(self)
+        open_action = QAction("Open Study Tracker", self)
+        open_action.triggered.connect(self._restore_from_tray)
+        exit_action = QAction("Exit", self)
+        exit_action.triggered.connect(self.close)
+        menu.addAction(open_action)
+        menu.addSeparator()
+        menu.addAction(exit_action)
+        tray.setContextMenu(menu)
+        tray.activated.connect(self._on_tray_activated)
+        tray.show()
+        self._tray_icon = tray
+
+    def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
+        if reason in {
+            QSystemTrayIcon.ActivationReason.Trigger,
+            QSystemTrayIcon.ActivationReason.DoubleClick,
+        }:
+            self._restore_from_tray()
+
+    def _restore_from_tray(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and self.isMinimized():
+            if self._tray_icon is not None:
+                self._tray_icon.show()
+                QTimer.singleShot(0, self.hide)
 
     # ------------------------------------------------------------------
     # Timer & background handlers
@@ -352,8 +431,7 @@ class MainWindow(QMainWindow):
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Timer Active")
             msg_box.setText(
-                "A study timer is currently active.\n"
-                "What would you like to do before closing?"
+                "A study timer is currently active.\nWhat would you like to do before closing?"
             )
             stop_btn = msg_box.addButton("Stop & Save", QMessageBox.ButtonRole.AcceptRole)
             pause_btn = msg_box.addButton("Pause & Quit", QMessageBox.ButtonRole.DestructiveRole)
@@ -365,6 +443,7 @@ class MainWindow(QMainWindow):
 
             if clicked == stop_btn:
                 from datetime import datetime
+
                 offset = datetime.now().astimezone().utcoffset()
                 offset_mins = int(offset.total_seconds() // 60) if offset else 0
                 try:
@@ -395,6 +474,20 @@ class MainWindow(QMainWindow):
             self._sidebar.setCurrentRow(index)
             self._update_timer_bar()
             log.debug("Navigated to page %d (%s).", index, self._PAGE_NAMES[index])
+
+    def _show_history_date(self, local_date: str) -> None:
+        """Navigate from a chart to the History view filtered to one day."""
+        if hasattr(self, "_history_page"):
+            self._history_page.show_date(local_date)
+        self._navigate(3)
+
+    def _restore_from_settings(self, backup_path: Path) -> None:
+        """Guard a destructive database replacement behind an idle timer."""
+        if self._timer_svc and self._timer_svc.is_active:
+            raise DatabaseError("Stop or discard the active timer before restoring a backup.")
+        if self._on_restore is None:
+            raise DatabaseError("Restore is unavailable in this window.")
+        self._on_restore(backup_path)
 
     def show_status(self, message: str, timeout_ms: int = 4000) -> None:
         """Display a short message in the status bar."""

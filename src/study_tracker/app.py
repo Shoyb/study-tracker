@@ -15,6 +15,7 @@ import os
 import sqlite3
 import sys
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from study_tracker.core import paths
@@ -27,6 +28,7 @@ from study_tracker.services.backup_service import (
     create_backup,
     list_backups,
     prune_backups,
+    restore_backup,
 )
 from study_tracker.ui.main_window import MainWindow
 from study_tracker.ui.signals import AppSignals
@@ -68,13 +70,14 @@ def _acquire_lock() -> bool:
         return True  # Fail open rather than refusing to start.
 
 
-def _load_stylesheet(app: QApplication) -> None:
-    """Load the light theme QSS from the package."""
-    qss_path = paths.theme_dir() / "light.qss"
+def _load_stylesheet(app: QApplication, theme: str = "light") -> None:
+    """Load a bundled stylesheet without depending on the working directory."""
+    selected = theme if theme in {"light", "dark"} else "light"
+    qss_path = paths.theme_dir() / f"{selected}.qss"
     if qss_path.exists():
         with open(qss_path, encoding="utf-8") as fh:
             app.setStyleSheet(fh.read())
-        log.debug("Stylesheet loaded from %s.", qss_path)
+        log.debug("%s stylesheet loaded from %s.", selected, qss_path)
     else:
         log.warning("Stylesheet not found at %s.", qss_path)
 
@@ -117,6 +120,7 @@ def _auto_backup(conn: sqlite3.Connection) -> None:
     settings_val = None
     try:
         from study_tracker.db import settings_repo
+
         settings_val = settings_repo.get(conn, "auto_backup")
     except Exception:
         pass
@@ -128,6 +132,7 @@ def _auto_backup(conn: sqlite3.Connection) -> None:
         keep_str = None
         try:
             from study_tracker.db import settings_repo
+
             keep_str = settings_repo.get(conn, "backup_copies")
         except Exception:
             pass
@@ -158,15 +163,11 @@ class Application(QApplication):
             QMessageBox.warning(
                 None,  # type: ignore[arg-type]
                 "Already running",
-                "Study Tracker is already open.\n"
-                "Check the system tray or the taskbar.",
+                "Study Tracker is already open.\nCheck the system tray or the taskbar.",
             )
             sys.exit(0)
 
-        # 3. Stylesheet.
-        _load_stylesheet(self)
-
-        # 4. Database.
+        # 3. Database.
         try:
             self._conn = _open_database()
             _auto_backup(self._conn)
@@ -178,12 +179,55 @@ class Application(QApplication):
             )
             sys.exit(1)
 
-        # 5. Signals hub and clock.
-        self._signals = AppSignals(self)
-        self._clock = Clock()
+        # 4. Theme, signals hub, and clock.
+        from study_tracker.db import settings_repo
 
-        # 6. Main window.
-        self._window = MainWindow(self._signals, conn=self._conn, clock=self._clock)
+        self.setWindowIcon(QIcon(str(paths.icon_path())))
+        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "light")
+        self._signals = AppSignals(self)
+        self._signals.settings_changed.connect(self._apply_saved_theme)
+        self._clock = Clock()
+        self._apply_saved_theme()
+
+        # 5. Main window.
+        self._window = MainWindow(
+            self._signals,
+            conn=self._conn,
+            clock=self._clock,
+            on_restore=self._restore_database,
+            database_path=paths.db_path(),
+            log_path=paths.log_path(),
+        )
         self._window.show()
 
         log.info("Startup complete.")
+
+    def _apply_saved_theme(self) -> None:
+        from study_tracker.db import settings_repo
+
+        _load_stylesheet(self, settings_repo.get(self._conn, "theme") or "light")
+
+    def _restore_database(self, backup_path) -> None:
+        """Safety-back up, replace, reopen, and rebuild pages using the new database."""
+        create_backup(self._conn, paths.backup_dir())
+        self._conn.close()
+        try:
+            restore_backup(backup_path, paths.db_path())
+            self._conn = _open_database()
+        except Exception:
+            self._conn = _open_database()
+            raise
+        self._window.close()
+        self._signals = AppSignals(self)
+        self._signals.settings_changed.connect(self._apply_saved_theme)
+        self._clock = Clock()
+        self._apply_saved_theme()
+        self._window = MainWindow(
+            self._signals,
+            conn=self._conn,
+            clock=self._clock,
+            on_restore=self._restore_database,
+            database_path=paths.db_path(),
+            log_path=paths.log_path(),
+        )
+        self._window.show()

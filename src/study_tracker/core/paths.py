@@ -60,4 +60,17 @@ def lock_path() -> pathlib.Path:
 
 def theme_dir() -> pathlib.Path:
     """Directory containing QSS stylesheet files (inside the package)."""
-    return pathlib.Path(__file__).parent.parent / "ui" / "theme"
+    return resource_dir() / "ui" / "theme"
+
+
+def resource_dir() -> pathlib.Path:
+    """Return package resources in development and in a PyInstaller bundle."""
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        return pathlib.Path(bundle_root) / "study_tracker"
+    return pathlib.Path(__file__).parent.parent
+
+
+def icon_path() -> pathlib.Path:
+    """Path to the packaged application icon."""
+    return resource_dir() / "ui" / "assets" / "app.svg"

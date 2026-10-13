@@ -88,7 +88,18 @@ def run_migrations(conn: sqlite3.Connection, db_path: Path) -> None:
         log.info("Migration %03d applied successfully.", version)
 
     final = _get_user_version(conn)
+    # Migration 002 adds task UUIDs.  Generate them here because SQLite has no
+    # portable UUID function and old databases must retain their task links.
+    from study_tracker.db.tasks_repo import ensure_uuids
+
+    ensure_uuids(conn)
     log.info("Database schema version: %d", final)
+
+
+def latest_known_version() -> int:
+    """Return the newest schema version this app can safely open."""
+    migrations = _migration_files()
+    return migrations[-1][0] if migrations else 0
 
 
 def log_row_counts(conn: sqlite3.Connection) -> None:
