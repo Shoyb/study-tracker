@@ -159,7 +159,7 @@ class Application(QApplication):
     def __init__(self, argv: list[str]) -> None:
         super().__init__(argv)
         self.setApplicationName("Study Tracker")
-        self.setApplicationVersion("0.1.0")
+        self.setApplicationVersion("0.1.1")
         self.setOrganizationName("StudyTracker")
 
         # 1. Logging (before anything else so errors are recorded).

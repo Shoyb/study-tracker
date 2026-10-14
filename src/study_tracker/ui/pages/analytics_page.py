@@ -59,7 +59,7 @@ class AnalyticsPage(QWidget):
         controls = QHBoxLayout()
         controls.addWidget(QLabel("<h2>Analytics</h2>"))
         controls.addStretch()
-        for label, days in (("30 days", 30), ("90 days", 90), ("180 days", 180)):
+        for label, days in (("1 day", 1), ("7 days", 7), ("15 days", 15), ("30 days", 30)):
             self._range.addItem(label, days)
         self._range.currentIndexChanged.connect(self.refresh)
         controls.addWidget(QLabel("Range:"))

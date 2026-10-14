@@ -426,6 +426,18 @@ def test_analytics_exams_tab_filters_by_category_and_level(qtbot, db_conn):
     assert page._exam_statistics.rowCount() == 1
 
 
+def test_analytics_range_options(qtbot, db_conn):
+    page = AnalyticsPage(db_conn, AppSignals(), FakeClock("2026-10-13T12:00:00Z"))
+    qtbot.addWidget(page)
+
+    assert [page._range.itemText(index) for index in range(page._range.count())] == [
+        "1 day", "7 days", "15 days", "30 days"
+    ]
+    assert [page._range.itemData(index) for index in range(page._range.count())] == [
+        1, 7, 15, 30
+    ]
+
+
 def test_calendar_day_detail_uses_cutoff_allocated_session_time(qtbot, db_conn):
     clock = FakeClock("2026-10-13T12:00:00Z")
     session_service.add_manual_timed(
@@ -498,6 +510,37 @@ def test_timer_page_pomodoro_mode_saves_focus_and_skips_break(qtbot, db_conn):
     page._skip_break()
     assert timer.phase == "focus"
     assert timer.is_running
+    timer.discard()
+
+
+def test_timer_floating_clock_stays_on_top_and_tracks_timer(qtbot, db_conn):
+    clock = FakeClock("2026-10-13T10:00:00Z")
+    timer = TimerService(db_conn, clock)
+    page = TimerPage(db_conn, timer, AppSignals(), clock)
+    qtbot.addWidget(page)
+    page.show()
+
+    page._on_start()
+    page._float_btn.click()
+
+    assert page._floating_clock.isVisible()
+    assert page._floating_clock.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert page._floating_clock.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert page._floating_display.text() == page._display.text()
+
+    clock.advance(seconds=65)
+    page._on_tick()
+    assert page._floating_display.text() == page._display.text()
+    assert "Running" in page._floating_status.text()
+    page._floating_pause_btn.click()
+    assert timer.is_paused
+    assert page._floating_pause_btn.text() == "Resume"
+    page._floating_pause_btn.click()
+    assert timer.is_running
+
+    page._floating_clock.close()
+    page._float_btn.click()
+    assert page._floating_clock.isVisible()
     timer.discard()
 
 

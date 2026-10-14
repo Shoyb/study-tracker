@@ -6,10 +6,13 @@ import logging
 import sqlite3
 from datetime import date, timedelta
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtGui import QColor, QMouseEvent
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -54,6 +57,14 @@ class TimerPage(QWidget):
         self._signals = signals
         self._clock = clock
         self._pomodoro = PomodoroService(conn, timer_svc)
+        self._floating_clock: QDialog | None = None
+        self._floating_header: QWidget | None = None
+        self._floating_title: QLabel | None = None
+        self._floating_indicator: QLabel | None = None
+        self._floating_pause_btn: QPushButton | None = None
+        self._floating_display: QLabel | None = None
+        self._floating_status: QLabel | None = None
+        self._floating_drag_offset: QPoint | None = None
 
         self._build_ui()
         self._signals.timer_tick.connect(self._on_tick)
@@ -100,11 +111,14 @@ class TimerPage(QWidget):
         self._skip_break_btn = QPushButton("Skip break")
         self._skip_break_btn.clicked.connect(self._skip_break)
         self._skip_break_btn.setEnabled(False)
+        self._float_btn = QPushButton("Float clock")
+        self._float_btn.clicked.connect(self._show_floating_clock)
         mode_row.addWidget(QLabel("Mode:"))
         mode_row.addWidget(self._mode_combo)
         mode_row.addWidget(QLabel("Preset:"))
         mode_row.addWidget(self._preset_combo)
         mode_row.addWidget(self._skip_break_btn)
+        mode_row.addWidget(self._float_btn)
         mode_row.addStretch()
         card_layout.addLayout(mode_row)
 
@@ -329,6 +343,162 @@ class TimerPage(QWidget):
             self._status_label.setText("Idle")
             self._status_label.setStyleSheet("font-size: 11pt; color: #C4D3E1;")
             self._display.setText("00:00:00")
+        self._refresh_floating_clock()
+
+    def _show_floating_clock(self) -> None:
+        if self._floating_clock is None:
+            self._floating_clock = QDialog(
+                self.window(),
+                Qt.WindowType.Tool
+                | Qt.WindowType.FramelessWindowHint
+                | Qt.WindowType.WindowStaysOnTopHint,
+            )
+            self._floating_clock.setObjectName("FloatingClock")
+            self._floating_clock.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+            self._floating_clock.setFixedSize(330, 186)
+            self._floating_clock.setStyleSheet(
+                "QDialog#FloatingClock { background: transparent; }"
+                "QFrame#FloatingClockSurface { background-color: #1F2A32; "
+                "border: 1px solid #3A4F5F; border-radius: 14px; }"
+                "QLabel#FloatingClockTitle { color: #AAB9C5; font-size: 8pt; "
+                "font-weight: 700; }"
+                "QLabel#FloatingClockDisplay { color: #90CAF9; font-family: Consolas; "
+                "font-size: 31pt; font-weight: 700; }"
+                "QLabel#FloatingClockStatus { color: #D3DDE5; font-size: 9pt; }"
+                "QLabel#FloatingClockIndicator { color: #7FE3A2; font-size: 11pt; }"
+                "QPushButton#FloatingClockClose { background: transparent; color: #AAB9C5; "
+                "border: none; border-radius: 14px; min-width: 28px; max-width: 28px; "
+                "min-height: 28px; max-height: 28px; padding: 0; font-size: 15pt; }"
+                "QPushButton#FloatingClockClose:hover { background: #3A4F5F; color: #FFFFFF; }"
+                "QPushButton#FloatingClockPause { background: #1976D2; color: #FFFFFF; "
+                "border: none; border-radius: 6px; padding: 5px 14px; min-width: 70px; }"
+                "QPushButton#FloatingClockPause:hover { background: #2D8BE0; }"
+                "QPushButton#FloatingClockOpen { background: transparent; color: #C4D3E1; "
+                "border: 1px solid #52616D; border-radius: 6px; padding: 5px 12px; }"
+                "QPushButton#FloatingClockOpen:hover { background: #2B3943; }"
+            )
+
+            window_layout = QVBoxLayout(self._floating_clock)
+            window_layout.setContentsMargins(10, 10, 10, 10)
+            surface = QFrame()
+            surface.setObjectName("FloatingClockSurface")
+            shadow = QGraphicsDropShadowEffect(surface)
+            shadow.setBlurRadius(24)
+            shadow.setOffset(0, 6)
+            shadow.setColor(QColor(0, 0, 0, 110))
+            surface.setGraphicsEffect(shadow)
+            window_layout.addWidget(surface)
+
+            layout = QVBoxLayout(surface)
+            layout.setContentsMargins(15, 10, 15, 12)
+            layout.setSpacing(4)
+            self._floating_header = QWidget()
+            header_row = QHBoxLayout(self._floating_header)
+            header_row.setContentsMargins(0, 0, 0, 0)
+            header_row.setSpacing(7)
+            self._floating_indicator = QLabel("●")
+            self._floating_indicator.setObjectName("FloatingClockIndicator")
+            self._floating_title = QLabel("STUDY TIMER")
+            self._floating_title.setObjectName("FloatingClockTitle")
+            close_button = QPushButton("×")
+            close_button.setObjectName("FloatingClockClose")
+            close_button.setToolTip("Hide floating clock")
+            close_button.clicked.connect(self._floating_clock.hide)
+            header_row.addWidget(self._floating_indicator)
+            header_row.addWidget(self._floating_title)
+            header_row.addStretch()
+            header_row.addWidget(close_button)
+            draggable_widgets = (
+                self._floating_header,
+                self._floating_indicator,
+                self._floating_title,
+            )
+            for draggable in draggable_widgets:
+                draggable.installEventFilter(self)
+
+            self._floating_display = QLabel("00:00:00")
+            self._floating_display.setObjectName("FloatingClockDisplay")
+            self._floating_display.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._floating_status = QLabel("Idle")
+            self._floating_status.setObjectName("FloatingClockStatus")
+            self._floating_status.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._floating_pause_btn = QPushButton("Pause")
+            self._floating_pause_btn.setObjectName("FloatingClockPause")
+            self._floating_pause_btn.clicked.connect(self._on_pause_resume)
+            self._floating_open_btn = QPushButton("Open timer")
+            self._floating_open_btn.setObjectName("FloatingClockOpen")
+            self._floating_open_btn.clicked.connect(self._return_to_timer)
+            controls = QHBoxLayout()
+            controls.setContentsMargins(0, 3, 0, 0)
+            controls.addWidget(self._floating_pause_btn)
+            controls.addStretch()
+            controls.addWidget(self._floating_open_btn)
+            layout.addWidget(self._floating_header)
+            layout.addWidget(self._floating_display)
+            layout.addWidget(self._floating_status)
+            layout.addLayout(controls)
+
+        self._refresh_floating_clock()
+        self._floating_clock.show()
+        self._floating_clock.raise_()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        draggable_widgets = (
+            self._floating_header,
+            self._floating_title,
+            self._floating_indicator,
+        )
+        if watched in draggable_widgets and isinstance(event, QMouseEvent):
+            if (
+                event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                self._floating_drag_offset = (
+                    event.globalPosition().toPoint()
+                    - self._floating_clock.frameGeometry().topLeft()
+                )
+                return True
+            if event.type() == QEvent.Type.MouseMove and self._floating_drag_offset is not None:
+                if event.buttons() & Qt.MouseButton.LeftButton:
+                    self._floating_clock.move(
+                        event.globalPosition().toPoint() - self._floating_drag_offset
+                    )
+                    return True
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                self._floating_drag_offset = None
+        return super().eventFilter(watched, event)
+
+    def _return_to_timer(self) -> None:
+        self._floating_clock.hide()
+        window = self.window()
+        navigate = getattr(window, "_navigate", None)
+        if navigate is not None:
+            navigate(1)
+        window.showNormal()
+        window.raise_()
+        window.activateWindow()
+
+    def _refresh_floating_clock(self) -> None:
+        if self._floating_clock is None or not self._floating_clock.isVisible():
+            return
+        assert self._floating_display is not None
+        assert self._floating_status is not None
+        assert self._floating_pause_btn is not None
+        self._floating_display.setText(self._display.text())
+        self._floating_pause_btn.setEnabled(self._timer.is_active)
+        self._floating_pause_btn.setText("Resume" if self._timer.is_paused else "Pause")
+        status = self._status_label.text()
+        self._floating_indicator.setStyleSheet(
+            "color: #FFB870;" if self._timer.is_paused else "color: #7FE3A2;"
+        )
+        if self._timer.is_active:
+            details = [status, self._subject_combo.currentText()]
+            task = self._task_combo.currentText()
+            if task and task != "None (general study)":
+                details.append(task)
+            status = " · ".join(details)
+        self._floating_status.setText(status)
+        self._floating_status.setToolTip(status)
 
     def _on_tick(self) -> None:
         if self._timer.is_active:
@@ -349,6 +519,7 @@ class TimerPage(QWidget):
                     self._signals.timer_state_changed.emit()
                     self._sync_with_timer_state()
                     self._status_label.setText("Countdown complete. Session saved.")
+                    self._refresh_floating_clock()
                     return
             if previous_phase != self._timer.phase and self._timer.phase is not None:
                 self._signals.pomodoro_phase_changed.emit(self._timer.phase)
@@ -358,6 +529,7 @@ class TimerPage(QWidget):
                 self._display.setText(format_duration_short(self._timer.remaining_seconds))
             else:
                 self._display.setText(format_duration_short(secs))
+            self._refresh_floating_clock()
 
     def _on_start(self) -> None:
         subj_id = self._subject_combo.currentData()
